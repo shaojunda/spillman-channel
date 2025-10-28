@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ckb-std = "0.17.0"
+ckb-std = "0.18.0"
+ckb-hash = { version = "0.203.0", default-features = false, features = ["ckb-contract"] }
 
 [features]
 library = []
