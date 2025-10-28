@@ -16,13 +16,16 @@ ckb_std::entry!(program_entry);
 // For more details, please refer to ckb-std's default_alloc macro
 // and the buddy-alloc alloc implementation.
 ckb_std::default_alloc!(16384, 1258306, 64);
-use alloc::{vec::Vec};
+use alloc::{ffi::CString,vec::Vec};
 use ckb_std::{
     ckb_constants::Source,
-    ckb_types::{bytes::Bytes, prelude::*},
+    ckb_types::{bytes::Bytes, core::ScriptHashType, packed::Transaction, prelude::*},
     error::SysError,
-    high_level::{load_input_since, load_transaction, load_witness, load_script},
+    high_level::{exec_cell, load_input_since, load_script, load_transaction, load_witness},
 };
+use hex::encode;
+
+include!(concat!(env!("OUT_DIR"), "/auth_code_hash.rs"));
 
 #[repr(i8)]
 pub enum Error {
@@ -35,6 +38,11 @@ pub enum Error {
     WitnessLenError,
     UnsupportedVersion,
     InvalidUnlockType,
+    CommitmentMustHaveExactlyTwoOutputs,
+    TimeoutMustHaveExactlyOneOutput,
+    InvalidLockArgs,
+    UserPubkeyHashMismatch,
+    MerchantPubkeyHashMismatch,
     EmptyWitnessArgsError,
     ArgsLenError,
     AuthError,
@@ -100,13 +108,15 @@ fn verify() -> Result<(), Error> {
         return Err(Error::EmptyWitnessArgsError);
     }
 
+    // Load transaction once and reuse it
+    let tx = load_transaction()?;
+
     let message = {
-        let tx = load_transaction()?
-            .raw()
+        let raw_tx = tx.raw()
             .as_builder()
             .cell_deps(Default::default())
             .build();
-        blake2b_256(tx.as_slice())
+        blake2b_256(raw_tx.as_slice())
     };
 
     let script = load_script()?;
@@ -127,21 +137,80 @@ fn verify() -> Result<(), Error> {
     let unlock_type = witness.remove(0);
 
     match unlock_type {
-        UNLOCK_TYPE_COMMITMENT => verify_commitment_path(merchant_pubkey_hash, user_pubkey_hash, message, witness)?,
-        UNLOCK_TYPE_TIMEOUT => verify_timeout_path(merchant_pubkey_hash, user_pubkey_hash, timeout_epoch, message, witness)?,
+        UNLOCK_TYPE_COMMITMENT => verify_commitment_path(merchant_pubkey_hash, user_pubkey_hash, message, witness, &tx)?,
+        UNLOCK_TYPE_TIMEOUT => verify_timeout_path(merchant_pubkey_hash, user_pubkey_hash, timeout_epoch, message, witness, &tx)?,
         _ => return Err(Error::InvalidUnlockType),
     }
     Ok(())
 }
 
-fn verify_commitment_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], message: [u8; 32], witness: Vec<u8>) -> Result<(), Error> {
+fn verify_commitment_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], message: [u8; 32], witness: Vec<u8>, tx: &Transaction) -> Result<(), Error> {
+    let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
+
+    // Verify user signature
+    verify_signature_with_auth(user_pubkey_hash, &message, user_signature)?;
+
+    // Verify merchant signature
+    verify_signature_with_auth(merchant_pubkey_hash, &message, merchant_signature)?;
+
+    // Verify commitment output structure
+    verify_commitment_output_structure(merchant_pubkey_hash, user_pubkey_hash, tx)?;
+
+    Ok(())
+}
+
+fn verify_timeout_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], timeout_epoch: u64, message: [u8; 32], witness: Vec<u8>, tx: &Transaction) -> Result<(), Error> {
     let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
 
     Ok(())
 }
 
-fn verify_timeout_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], timeout_epoch: u64, message: [u8; 32], witness: Vec<u8>) -> Result<(), Error> {
-    let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
+fn verify_signature_with_auth(pubkey_hash: &[u8], message: &[u8; 32], signature: &[u8]) -> Result<(), Error> {
+    let algorithm_id_str = CString::new(encode([0u8])).unwrap();
+    let signature_str = CString::new(encode(signature)).unwrap();
+    let message_str = CString::new(encode(message)).unwrap();
+    let pubkey_hash_str = CString::new(encode(pubkey_hash)).unwrap();
+
+    let args = [
+        algorithm_id_str.as_c_str(),
+        signature_str.as_c_str(),
+        message_str.as_c_str(),
+        pubkey_hash_str.as_c_str(),
+    ];
+
+    exec_cell(&AUTH_CODE_HASH, ScriptHashType::Data1, &args).map_err(|_| Error::AuthError)?;
+
+    Ok(())
+}
+
+fn verify_commitment_output_structure(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], tx: &Transaction) -> Result<(), Error> {
+    let outputs = tx.raw().outputs();
+
+    if outputs.len() != 2 {
+        return Err(Error::CommitmentMustHaveExactlyTwoOutputs);
+    }
+
+    let user_output = outputs.get(0).unwrap();
+    let user_lock_args: Bytes = user_output.lock().args().unpack();
+
+    if user_lock_args.len() < 20 {
+        return Err(Error::InvalidLockArgs);
+    }
+
+    if &user_lock_args[0..20] != user_pubkey_hash {
+        return Err(Error::UserPubkeyHashMismatch);
+    }
+
+    let merchant_output = outputs.get(1).unwrap();
+    let merchant_lock_args: Bytes = merchant_output.lock().args().unpack();
+
+    if merchant_lock_args.len() < 20 {
+        return Err(Error::InvalidLockArgs);
+    }
+
+    if &merchant_lock_args[0..20] != merchant_pubkey_hash {
+        return Err(Error::MerchantPubkeyHashMismatch);
+    }
 
     Ok(())
 }

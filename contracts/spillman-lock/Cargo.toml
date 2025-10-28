@@ -6,7 +6,11 @@ edition = "2021"
 [dependencies]
 ckb-std = "0.18.0"
 ckb-hash = { version = "0.203.0", default-features = false, features = ["ckb-contract"] }
+hex = { version = "0.4", default-features = false, features = ["alloc"]}
 
 [features]
 library = []
 native-simulator = ["library", "ckb-std/native-simulator"]
+
+[build-dependencies]
+ckb-gen-types = "0.203.0"
