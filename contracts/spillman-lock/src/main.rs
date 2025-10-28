@@ -19,7 +19,7 @@ ckb_std::default_alloc!(16384, 1258306, 64);
 use alloc::{ffi::CString,vec::Vec};
 use ckb_std::{
     ckb_constants::Source,
-    ckb_types::{bytes::Bytes, core::ScriptHashType, packed::Transaction, prelude::*},
+    ckb_types::{bytes::Bytes, core::{ScriptHashType}, packed::{Script, Transaction}, prelude::*},
     error::SysError,
     high_level::{exec_cell, load_input_since, load_script, load_transaction, load_witness},
     since::Since,
@@ -27,6 +27,7 @@ use ckb_std::{
 use hex::encode;
 
 include!(concat!(env!("OUT_DIR"), "/auth_code_hash.rs"));
+include!(concat!(env!("OUT_DIR"), "/secp256k1_code_hash.rs"));
 
 #[repr(i8)]
 pub enum Error {
@@ -211,24 +212,24 @@ fn verify_commitment_output_structure(merchant_pubkey_hash: &[u8], user_pubkey_h
     }
 
     let user_output = outputs.get(0).unwrap();
-    let user_lock_args: Bytes = user_output.lock().args().unpack();
+    let expected_user_lock = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(user_pubkey_hash.pack())
+        .build();
 
-    if user_lock_args.len() < 20 {
-        return Err(Error::InvalidLockArgs);
-    }
-
-    if &user_lock_args[0..20] != user_pubkey_hash {
+    if user_output.lock().calc_script_hash() != expected_user_lock.calc_script_hash() {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
     let merchant_output = outputs.get(1).unwrap();
-    let merchant_lock_args: Bytes = merchant_output.lock().args().unpack();
+    let expected_merchant_lock = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(merchant_pubkey_hash.pack())
+        .build();
 
-    if merchant_lock_args.len() < 20 {
-        return Err(Error::InvalidLockArgs);
-    }
-
-    if &merchant_lock_args[0..20] != merchant_pubkey_hash {
+    if merchant_output.lock().calc_script_hash() != expected_merchant_lock.calc_script_hash() {
         return Err(Error::MerchantPubkeyHashMismatch);
     }
 
@@ -244,13 +245,13 @@ fn verify_refund_output_structure(user_pubkey_hash: &[u8], tx: &Transaction) -> 
     }
 
     let user_output = outputs.get(0).unwrap();
-    let user_lock_args: Bytes = user_output.lock().args().unpack();
+    let expected_user_lock = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(user_pubkey_hash.pack())
+        .build();
 
-    if user_lock_args.len() < 20 {
-        return Err(Error::InvalidLockArgs);
-    }
-
-    if &user_lock_args[0..20] != user_pubkey_hash {
+    if user_output.lock().calc_script_hash() != expected_user_lock.calc_script_hash() {
         return Err(Error::UserPubkeyHashMismatch);
     }
 

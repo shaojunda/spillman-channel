@@ -14,3 +14,4 @@ native-simulator = ["library", "ckb-std/native-simulator"]
 
 [build-dependencies]
 ckb-gen-types = "0.203.0"
+hex = "0.4"
