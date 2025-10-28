@@ -131,8 +131,8 @@ struct SpillmanLockArgs {
 struct CommitmentWitness {
     empty_witness_args: [u8; 16],  // WitnessArgs placeholder
     unlock_type: u8,               // 0x00 = Commitment Path
-    user_signature: [u8; 65],      // 用户的 CKB 签名（已在承诺交易中提供）
     merchant_signature: [u8; 65],  // 商户的 CKB 签名（商户上链时补充）
+    user_signature: [u8; 65],      // 用户的 CKB 签名（已在承诺交易中提供）
 }
 ```
 
@@ -150,8 +150,8 @@ struct CommitmentWitness {
 struct TimeoutWitness {
     empty_witness_args: [u8; 16],  // WitnessArgs placeholder
     unlock_type: u8,               // 0x01 = Timeout Path
-    user_signature: [u8; 65],      // 用户的 CKB 签名（超时后补充）
     merchant_signature: [u8; 65],  // 商户的 CKB 签名（创建时预签名）
+    user_signature: [u8; 65],      // 用户的 CKB 签名（超时后补充）
 }
 ```
 
@@ -173,8 +173,11 @@ struct TimeoutWitness {
 | **Timeout Path** | 用户地址（全额退款） | ❌ 无 | **必须恰好 1 个** |
 
 **手续费处理**：
-- 通道创建时预留手续费：例如充值 1001 CKB（1000 CKB 通道容量 + 1 CKB 手续费）
-- 承诺/退款交易：Output 总和 = 1000 CKB，手续费从差额扣除（1 CKB）
+- 通道创建时预留手续费：例如充值 1001 CKB（实际可用容量 + 预留手续费）
+- 承诺/退款交易：
+  - Input: 1001 CKB (Spillman Lock cell)
+  - Outputs 总和: 例如 1000 CKB
+  - 手续费 = Input - Outputs (例如 1 CKB)
 - SIGHASH_ALL 锁定交易结构，不能后续添加输出
 
 **设计优势**：
@@ -371,11 +374,11 @@ Spillman Lock = 2-of-2 多签 Lock Script
 |------|---------------------------|------------------------|
 | **解锁者** | 商户 | 用户 |
 | **时间限制** | 超时前任何时间 | 必须超时后 |
-| **签名要求** | 用户签名 + 商户签名 | 用户签名 |
+| **签名要求** | 用户签名 + 商户签名 | 用户签名 + 商户签名（预签名） |
 | **输出结构** | Output 0: 用户（找零），Output 1: 商户（支付） | Output 0: 用户（全额） |
 | **商户激励** | 及时结算获得收入 | 不结算将失去所有收入 |
 | **用户保护** | 可以用退款交易兜底 | 超时后可全额退款 |
-| **Witness 大小** | 147 bytes | 82 bytes |
+| **Witness 大小** | 147 bytes | 147 bytes |
 
 ## 7. 完整使用流程
 
