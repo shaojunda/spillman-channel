@@ -22,6 +22,7 @@ use ckb_std::{
     ckb_types::{bytes::Bytes, core::ScriptHashType, packed::Transaction, prelude::*},
     error::SysError,
     high_level::{exec_cell, load_input_since, load_script, load_transaction, load_witness},
+    since::Since,
 };
 use hex::encode;
 
@@ -39,7 +40,8 @@ pub enum Error {
     UnsupportedVersion,
     InvalidUnlockType,
     CommitmentMustHaveExactlyTwoOutputs,
-    TimeoutMustHaveExactlyOneOutput,
+    RefundMustHaveExactlyOneOutput,
+    TimeoutNotReached,
     InvalidLockArgs,
     UserPubkeyHashMismatch,
     MerchantPubkeyHashMismatch,
@@ -162,6 +164,24 @@ fn verify_commitment_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], 
 fn verify_timeout_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], timeout_epoch: u64, message: [u8; 32], witness: Vec<u8>, tx: &Transaction) -> Result<(), Error> {
     let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
 
+    let raw_since = load_input_since(0, Source::GroupInput)?;
+    let since = Since::new(raw_since);
+    let timeout = Since::new(timeout_epoch);
+
+    if since < timeout {
+        return Err(Error::TimeoutNotReached);
+    }
+
+    // Verify user signature
+    verify_signature_with_auth(user_pubkey_hash, &message, user_signature)?;
+
+    // Verify merchant signature
+    verify_signature_with_auth(merchant_pubkey_hash, &message, merchant_signature)?;
+
+    // Verify refund output structure
+    verify_refund_output_structure(user_pubkey_hash, tx)?;
+
+
     Ok(())
 }
 
@@ -210,6 +230,28 @@ fn verify_commitment_output_structure(merchant_pubkey_hash: &[u8], user_pubkey_h
 
     if &merchant_lock_args[0..20] != merchant_pubkey_hash {
         return Err(Error::MerchantPubkeyHashMismatch);
+    }
+
+    Ok(())
+}
+
+
+fn verify_refund_output_structure(user_pubkey_hash: &[u8], tx: &Transaction) -> Result<(), Error> {
+    let outputs = tx.raw().outputs();
+
+    if outputs.len() != 1 {
+        return Err(Error::RefundMustHaveExactlyOneOutput);
+    }
+
+    let user_output = outputs.get(0).unwrap();
+    let user_lock_args: Bytes = user_output.lock().args().unpack();
+
+    if user_lock_args.len() < 20 {
+        return Err(Error::InvalidLockArgs);
+    }
+
+    if &user_lock_args[0..20] != user_pubkey_hash {
+        return Err(Error::UserPubkeyHashMismatch);
     }
 
     Ok(())
