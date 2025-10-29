@@ -3,7 +3,6 @@ use ckb_sdk::util::blake160;
 use ckb_std::since::{EpochNumberWithFraction, Since};
 use ckb_testtool::context::Context;
 use ckb_testtool::{
-    builtin::ALWAYS_SUCCESS,
     ckb_crypto::secp::Generator,
     ckb_hash::blake2b_256,
     ckb_types::{
