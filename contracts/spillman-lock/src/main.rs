@@ -187,7 +187,7 @@ fn verify_timeout_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], tim
 }
 
 fn verify_signature_with_auth(pubkey_hash: &[u8], message: &[u8; 32], signature: &[u8]) -> Result<(), Error> {
-    let algorithm_id_str = CString::new(encode([0u8])).unwrap();
+    let algorithm_id_str = CString::new(encode([0u8])).unwrap(); // 0x00 = CKB/SECP256K1
     let signature_str = CString::new(encode(signature)).unwrap();
     let message_str = CString::new(encode(message)).unwrap();
     let pubkey_hash_str = CString::new(encode(pubkey_hash)).unwrap();
