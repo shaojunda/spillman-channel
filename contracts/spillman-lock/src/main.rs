@@ -16,13 +16,21 @@ ckb_std::entry!(program_entry);
 // For more details, please refer to ckb-std's default_alloc macro
 // and the buddy-alloc alloc implementation.
 ckb_std::default_alloc!(16384, 1258306, 64);
-use alloc::{ffi::CString,vec::Vec};
+use alloc::{ffi::CString, vec::Vec};
 use ckb_std::{
     ckb_constants::Source,
-    ckb_types::{bytes::Bytes, core::{ScriptHashType}, packed::{Script, Transaction}, prelude::*},
+    ckb_types::{
+        bytes::Bytes,
+        core::ScriptHashType,
+        packed::{Script, Transaction},
+        prelude::*,
+    },
     error::SysError,
-    high_level::{exec_cell, load_input_since, load_script, load_transaction, load_witness},
+    high_level::{
+        load_input_since, load_script, load_transaction, load_witness, spawn_cell,
+    },
     since::Since,
+    syscalls::wait,
 };
 use hex::encode;
 
@@ -63,12 +71,11 @@ impl From<SysError> for Error {
     }
 }
 
-
 pub fn program_entry() -> i8 {
-   match verify() {
-    Ok(_) => 0,
-    Err(err) => err as i8,
-   }
+    match verify() {
+        Ok(_) => 0,
+        Err(err) => err as i8,
+    }
 }
 
 // a placeholder for empty witness args, to resolve the issue of xudt compatibility
@@ -79,7 +86,8 @@ const MERCHANT_PUBKEY_HASH_LEN: usize = 20;
 const USER_PUBKEY_HASH_LEN: usize = 20;
 const TIMEOUT_EPOCH_LEN: usize = 8;
 const VERSION_LEN: usize = 1;
-const ARGS_LEN: usize = MERCHANT_PUBKEY_HASH_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN; // 49 bytes
+const ARGS_LEN: usize =
+    MERCHANT_PUBKEY_HASH_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN; // 49 bytes
 
 // Script args field offsets
 const MERCHANT_PUBKEY_HASH_OFFSET: usize = 0;
@@ -88,12 +96,12 @@ const TIMEOUT_EPOCH_OFFSET: usize = USER_PUBKEY_HASH_OFFSET + USER_PUBKEY_HASH_L
 const VERSION_OFFSET: usize = TIMEOUT_EPOCH_OFFSET + TIMEOUT_EPOCH_LEN; // 48
 
 // Unlock type layout: [unlock_type(1)]
-const UNLOCK_TYPE_COMMITMENT: u8 = 0x00;  // Commitment Path
-const UNLOCK_TYPE_TIMEOUT: u8 = 0x01;     // Timeout Path
+const UNLOCK_TYPE_COMMITMENT: u8 = 0x00; // Commitment Path
+const UNLOCK_TYPE_TIMEOUT: u8 = 0x01; // Timeout Path
 const UNLOCK_TYPE_LEN: usize = 1;
 
 // Witness layout: [empty_witness_args(16)] + [unlock_type(1)] + [merchant_signature(65)] + [user_signature(65)]
-const SIGNATURE_LEN: usize = 65;  // Both merchant and user signatures are 65 bytes
+const SIGNATURE_LEN: usize = 65; // Both merchant and user signatures are 65 bytes
 const TOTAL_SIGNATURE_LEN: usize = SIGNATURE_LEN * 2;
 
 fn verify() -> Result<(), Error> {
@@ -102,12 +110,17 @@ fn verify() -> Result<(), Error> {
     }
 
     let mut witness = load_witness(0, Source::GroupInput)?;
+
     if witness.len() != EMPTY_WITNESS_ARGS.len() + UNLOCK_TYPE_LEN + TOTAL_SIGNATURE_LEN {
         return Err(Error::WitnessLenError);
     }
 
     // Verify and remove the empty WitnessArgs prefix (16 bytes)
-    if witness.drain(0..EMPTY_WITNESS_ARGS.len()).collect::<Vec<_>>() != EMPTY_WITNESS_ARGS {
+    if witness
+        .drain(0..EMPTY_WITNESS_ARGS.len())
+        .collect::<Vec<_>>()
+        != EMPTY_WITNESS_ARGS
+    {
         return Err(Error::EmptyWitnessArgsError);
     }
 
@@ -115,10 +128,7 @@ fn verify() -> Result<(), Error> {
     let tx = load_transaction()?;
 
     let message = {
-        let raw_tx = tx.raw()
-            .as_builder()
-            .cell_deps(Default::default())
-            .build();
+        let raw_tx = tx.raw().as_builder().cell_deps(Default::default()).build();
         blake2b_256(raw_tx.as_slice())
     };
 
@@ -130,7 +140,11 @@ fn verify() -> Result<(), Error> {
 
     let merchant_pubkey_hash = &args[MERCHANT_PUBKEY_HASH_OFFSET..USER_PUBKEY_HASH_OFFSET];
     let user_pubkey_hash = &args[USER_PUBKEY_HASH_OFFSET..TIMEOUT_EPOCH_OFFSET];
-    let timeout_epoch = u64::from_le_bytes(args[TIMEOUT_EPOCH_OFFSET..VERSION_OFFSET].try_into().unwrap());
+    let timeout_epoch = u64::from_le_bytes(
+        args[TIMEOUT_EPOCH_OFFSET..VERSION_OFFSET]
+            .try_into()
+            .unwrap(),
+    );
     let version = args[VERSION_OFFSET];
 
     if version != 0 {
@@ -140,15 +154,37 @@ fn verify() -> Result<(), Error> {
     let unlock_type = witness.remove(0);
 
     match unlock_type {
-        UNLOCK_TYPE_COMMITMENT => verify_commitment_path(merchant_pubkey_hash, user_pubkey_hash, message, witness, &tx)?,
-        UNLOCK_TYPE_TIMEOUT => verify_timeout_path(merchant_pubkey_hash, user_pubkey_hash, timeout_epoch, message, witness, &tx)?,
+        UNLOCK_TYPE_COMMITMENT => verify_commitment_path(
+            merchant_pubkey_hash,
+            user_pubkey_hash,
+            message,
+            witness,
+            &tx,
+        )?,
+        UNLOCK_TYPE_TIMEOUT => verify_timeout_path(
+            merchant_pubkey_hash,
+            user_pubkey_hash,
+            timeout_epoch,
+            message,
+            witness,
+            &tx,
+        )?,
         _ => return Err(Error::InvalidUnlockType),
     }
     Ok(())
 }
 
-fn verify_commitment_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], message: [u8; 32], witness: Vec<u8>, tx: &Transaction) -> Result<(), Error> {
+fn verify_commitment_path(
+    merchant_pubkey_hash: &[u8],
+    user_pubkey_hash: &[u8],
+    message: [u8; 32],
+    witness: Vec<u8>,
+    tx: &Transaction,
+) -> Result<(), Error> {
     let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
+
+    // Verify commitment output structure
+    verify_commitment_output_structure(merchant_pubkey_hash, user_pubkey_hash, tx)?;
 
     // Verify user signature
     verify_signature_with_auth(user_pubkey_hash, &message, user_signature)?;
@@ -156,13 +192,17 @@ fn verify_commitment_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], 
     // Verify merchant signature
     verify_signature_with_auth(merchant_pubkey_hash, &message, merchant_signature)?;
 
-    // Verify commitment output structure
-    verify_commitment_output_structure(merchant_pubkey_hash, user_pubkey_hash, tx)?;
-
     Ok(())
 }
 
-fn verify_timeout_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], timeout_epoch: u64, message: [u8; 32], witness: Vec<u8>, tx: &Transaction) -> Result<(), Error> {
+fn verify_timeout_path(
+    merchant_pubkey_hash: &[u8],
+    user_pubkey_hash: &[u8],
+    timeout_epoch: u64,
+    message: [u8; 32],
+    witness: Vec<u8>,
+    tx: &Transaction,
+) -> Result<(), Error> {
     let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
 
     let raw_since = load_input_since(0, Source::GroupInput)?;
@@ -182,11 +222,14 @@ fn verify_timeout_path(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], tim
     // Verify refund output structure
     verify_refund_output_structure(user_pubkey_hash, tx)?;
 
-
     Ok(())
 }
 
-fn verify_signature_with_auth(pubkey_hash: &[u8], message: &[u8; 32], signature: &[u8]) -> Result<(), Error> {
+fn verify_signature_with_auth(
+    pubkey_hash: &[u8],
+    message: &[u8; 32],
+    signature: &[u8],
+) -> Result<(), Error> {
     let algorithm_id_str = CString::new(encode([0u8])).unwrap(); // 0x00 = CKB/SECP256K1
     let signature_str = CString::new(encode(signature)).unwrap();
     let message_str = CString::new(encode(message)).unwrap();
@@ -199,12 +242,24 @@ fn verify_signature_with_auth(pubkey_hash: &[u8], message: &[u8; 32], signature:
         pubkey_hash_str.as_c_str(),
     ];
 
-    exec_cell(&AUTH_CODE_HASH, ScriptHashType::Data1, &args).map_err(|_| Error::AuthError)?;
+    // Spawn auth contract to verify signature
+    let pid = spawn_cell(&AUTH_CODE_HASH, ScriptHashType::Data1, &args, &[])
+        .map_err(|_| Error::AuthError)?;
 
-    Ok(())
+    // Wait for auth contract to complete and check exit code
+    let exit_code = wait(pid).map_err(|_| Error::AuthError)?;
+
+    match exit_code {
+        0 => Ok(()),
+        _ => Err(Error::AuthError),
+    }
 }
 
-fn verify_commitment_output_structure(merchant_pubkey_hash: &[u8], user_pubkey_hash: &[u8], tx: &Transaction) -> Result<(), Error> {
+fn verify_commitment_output_structure(
+    merchant_pubkey_hash: &[u8],
+    user_pubkey_hash: &[u8],
+    tx: &Transaction,
+) -> Result<(), Error> {
     let outputs = tx.raw().outputs();
 
     if outputs.len() != 2 {
@@ -235,7 +290,6 @@ fn verify_commitment_output_structure(merchant_pubkey_hash: &[u8], user_pubkey_h
 
     Ok(())
 }
-
 
 fn verify_refund_output_structure(user_pubkey_hash: &[u8], tx: &Transaction) -> Result<(), Error> {
     let outputs = tx.raw().outputs();

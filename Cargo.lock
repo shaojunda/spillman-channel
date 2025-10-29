@@ -2641,6 +2641,7 @@ version = "0.1.0"
 dependencies = [
  "ckb-sdk",
  "ckb-std",
+ "ckb-system-scripts 0.6.0",
  "ckb-testtool",
  "serde_json",
 ]
