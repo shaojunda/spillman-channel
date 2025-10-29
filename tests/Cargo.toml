@@ -10,4 +10,5 @@ native-simulator = [ "ckb-testtool/native-simulator" ]
 ckb-testtool = "0.16.0"
 ckb-std = "0.18.0"
 ckb-sdk = "4.4.0"
+ckb-system-scripts = "0.6.0"
 serde_json = "1.0"
