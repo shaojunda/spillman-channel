@@ -8,13 +8,11 @@ use ckb_testtool::{
     ckb_hash::blake2b_256,
     ckb_types::{
         bytes::Bytes,
-        core::{
-            ScriptHashType,
-            TransactionBuilder,
-            TransactionView
-        }, packed::*, prelude::*},
+        core::{ScriptHashType, TransactionBuilder, TransactionView},
+        packed::*,
+        prelude::*,
+    },
 };
-
 
 const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
 const UNLOCK_TYPE_COMMITMENT: u8 = 0x00;
@@ -22,10 +20,8 @@ const UNLOCK_TYPE_TIMEOUT: u8 = 0x01;
 
 // Mainnet/Testnet secp256k1_blake160_sighash_all code_hash
 const SECP256K1_CODE_HASH: [u8; 32] = [
-    0x9b, 0xd7, 0xe0, 0x6f, 0x3e, 0xcf, 0x4b, 0xe0,
-    0xf2, 0xfc, 0xd2, 0x18, 0x8b, 0x23, 0xf1, 0xb9,
-    0xfc, 0xc8, 0x8e, 0x5d, 0x4b, 0x65, 0xa8, 0x63,
-    0x7b, 0x17, 0x72, 0x3b, 0xbd, 0xa3, 0xcc, 0xe8,
+    0x9b, 0xd7, 0xe0, 0x6f, 0x3e, 0xcf, 0x4b, 0xe0, 0xf2, 0xfc, 0xd2, 0x18, 0x8b, 0x23, 0xf1, 0xb9,
+    0xfc, 0xc8, 0x8e, 0x5d, 0x4b, 0x65, 0xa8, 0x63, 0x7b, 0x17, 0x72, 0x3b, 0xbd, 0xa3, 0xcc, 0xe8,
 ];
 
 // Include your tests here
@@ -133,17 +129,25 @@ fn test_spillman_lock_commitment_path() {
     let tx = context.complete_tx(tx);
 
     let message = compute_signing_message(&tx);
-    let user_signature = user_key.0.sign_recoverable(&message.into()).unwrap().serialize();
-    let merchant_signature = merchant_key.0.sign_recoverable(&message.into()).unwrap().serialize();
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
     let witness = [
         &EMPTY_WITNESS_ARGS[..],
         &[UNLOCK_TYPE_COMMITMENT][..],
         &merchant_signature[..],
         &user_signature[..],
-    ].concat();
+    ]
+    .concat();
 
     let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
-
 
     // run
     let cycles = context
@@ -158,8 +162,12 @@ fn test_spillman_lock_commitment_path() {
         &[UNLOCK_TYPE_COMMITMENT][..],
         &merchant_signature[..],
         &wrong_user_signature[..],
-    ].concat();
-    let fail_tx = tx.as_advanced_builder().witness(wrong_witness.pack()).build();
+    ]
+    .concat();
+    let fail_tx = tx
+        .as_advanced_builder()
+        .witness(wrong_witness.pack())
+        .build();
 
     // run
     let err = context
@@ -233,12 +241,10 @@ fn test_spillman_lock_timeout_path() {
         .since(since_value.as_u64().pack())
         .build();
 
-    let outputs = vec![
-        CellOutput::new_builder()
-            .capacity(100_000_000_000u64.pack()) // 1000 CKB refund to user, 1 CKB fee
-            .lock(user_lock_script.clone())
-            .build(),
-    ];
+    let outputs = vec![CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack()) // 1000 CKB refund to user, 1 CKB fee
+        .lock(user_lock_script.clone())
+        .build()];
 
     let outputs_data = vec![Bytes::new(); 1];
 
@@ -252,8 +258,16 @@ fn test_spillman_lock_timeout_path() {
     let tx = context.complete_tx(tx);
 
     let message = compute_signing_message(&tx);
-    let user_signature = user_key.0.sign_recoverable(&message.into()).unwrap().serialize();
-    let merchant_signature = merchant_key.0.sign_recoverable(&message.into()).unwrap().serialize();
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
 
     // For timeout path: witness format is the same, but unlock_type is UNLOCK_TYPE_TIMEOUT
     let witness = [
@@ -261,7 +275,8 @@ fn test_spillman_lock_timeout_path() {
         &[UNLOCK_TYPE_TIMEOUT][..],
         &merchant_signature[..],
         &user_signature[..],
-    ].concat();
+    ]
+    .concat();
 
     let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
 
@@ -273,12 +288,16 @@ fn test_spillman_lock_timeout_path() {
 
     // Test: timeout not reached should fail
     let early_since = Since::from_epoch(EpochNumberWithFraction::new(10, 0, 1), false);
-    let early_input = success_tx.inputs().get(0).unwrap()
+    let early_input = success_tx
+        .inputs()
+        .get(0)
+        .unwrap()
         .as_builder()
         .since(early_since.as_u64().pack())
         .build();
 
-    let early_tx = success_tx.as_advanced_builder()
+    let early_tx = success_tx
+        .as_advanced_builder()
         .set_inputs(vec![early_input])
         .build();
 
@@ -294,9 +313,11 @@ fn test_spillman_lock_timeout_path() {
         &[invalid_unlock_type][..],
         &merchant_signature[..],
         &user_signature[..],
-    ].concat();
+    ]
+    .concat();
 
-    let invalid_tx = success_tx.as_advanced_builder()
+    let invalid_tx = success_tx
+        .as_advanced_builder()
         .set_witnesses(vec![invalid_witness.pack()])
         .build();
 
@@ -323,16 +344,26 @@ fn test_spillman_lock_timeout_path() {
 
     // Re-sign with the new transaction message
     let excessive_fee_message = compute_signing_message(&excessive_fee_base_tx);
-    let excessive_fee_user_sig = user_key.0.sign_recoverable(&excessive_fee_message.into()).unwrap().serialize();
-    let excessive_fee_merchant_sig = merchant_key.0.sign_recoverable(&excessive_fee_message.into()).unwrap().serialize();
+    let excessive_fee_user_sig = user_key
+        .0
+        .sign_recoverable(&excessive_fee_message.into())
+        .unwrap()
+        .serialize();
+    let excessive_fee_merchant_sig = merchant_key
+        .0
+        .sign_recoverable(&excessive_fee_message.into())
+        .unwrap()
+        .serialize();
     let excessive_fee_witness = [
         &EMPTY_WITNESS_ARGS[..],
         &[UNLOCK_TYPE_TIMEOUT][..],
         &excessive_fee_merchant_sig[..],
         &excessive_fee_user_sig[..],
-    ].concat();
+    ]
+    .concat();
 
-    let excessive_fee_tx = excessive_fee_base_tx.as_advanced_builder()
+    let excessive_fee_tx = excessive_fee_base_tx
+        .as_advanced_builder()
         .witness(excessive_fee_witness.pack())
         .build();
 
