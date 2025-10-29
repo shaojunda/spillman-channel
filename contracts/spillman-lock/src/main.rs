@@ -27,7 +27,8 @@ use ckb_std::{
     },
     error::SysError,
     high_level::{
-        load_input_since, load_script, load_transaction, load_witness, spawn_cell,
+        load_cell_capacity, load_input_since, load_script, load_transaction, load_witness,
+        spawn_cell,
     },
     since::Since,
     syscalls::wait,
@@ -57,6 +58,7 @@ pub enum Error {
     EmptyWitnessArgsError,
     ArgsLenError,
     AuthError,
+    ExcessiveFee,
 }
 
 impl From<SysError> for Error {
@@ -103,6 +105,9 @@ const UNLOCK_TYPE_LEN: usize = 1;
 // Witness layout: [empty_witness_args(16)] + [unlock_type(1)] + [merchant_signature(65)] + [user_signature(65)]
 const SIGNATURE_LEN: usize = 65; // Both merchant and user signatures are 65 bytes
 const TOTAL_SIGNATURE_LEN: usize = SIGNATURE_LEN * 2;
+
+// Maximum allowed transaction fee (1 CKB = 100,000,000 shannons)
+const MAX_FEE: u64 = 100_000_000;
 
 fn verify() -> Result<(), Error> {
     if load_input_since(1, Source::GroupInput).is_ok() {
@@ -307,6 +312,20 @@ fn verify_refund_output_structure(user_pubkey_hash: &[u8], tx: &Transaction) -> 
 
     if user_output.lock().calc_script_hash() != expected_user_lock.calc_script_hash() {
         return Err(Error::UserPubkeyHashMismatch);
+    }
+
+    // Check that the transaction fee is not excessive
+    // Load input capacity
+    let input_capacity = load_cell_capacity(0, Source::GroupInput)?;
+
+    // Get output capacity
+    let output = tx.raw().outputs().get(0).unwrap();
+    let output_capacity: u64 = output.capacity().unpack();
+
+    // Calculate fee and check it doesn't exceed MAX_FEE
+    let fee = input_capacity.saturating_sub(output_capacity);
+    if fee > MAX_FEE {
+        return Err(Error::ExcessiveFee);
     }
 
     Ok(())
