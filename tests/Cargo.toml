@@ -7,5 +7,7 @@ edition = "2021"
 native-simulator = [ "ckb-testtool/native-simulator" ]
 
 [dependencies]
-ckb-testtool = "0.15.0"
+ckb-testtool = "0.16.0"
+ckb-std = "0.18.0"
+ckb-sdk = "4.4.0"
 serde_json = "1.0"

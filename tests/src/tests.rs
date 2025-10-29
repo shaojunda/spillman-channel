@@ -1,47 +1,107 @@
 use crate::Loader;
-use ckb_testtool::ckb_types::{
-    bytes::Bytes,
-    core::TransactionBuilder,
-    packed::*,
-    prelude::*,
-};
+use ckb_sdk::util::blake160;
+use ckb_std::since::{EpochNumberWithFraction, Since};
 use ckb_testtool::context::Context;
+use ckb_testtool::{
+    builtin::ALWAYS_SUCCESS,
+    ckb_crypto::secp::Generator,
+    ckb_hash::blake2b_256,
+    ckb_types::{
+        bytes::Bytes,
+        core::{
+            TransactionBuilder,
+            TransactionView
+        }, packed::*, prelude::*},
+};
+
+
+const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
+const UNLOCK_TYPE_COMMITMENT: u8 = 0x00;
+const UNLOCK_TYPE_TIMEOUT: u8 = 0x01;
 
 // Include your tests here
 // See https://github.com/xxuejie/ckb-native-build-sample/blob/main/tests/src/tests.rs for more examples
 
 // generated unit test for contract spillman-lock
 #[test]
-fn test_spillman_lock() {
+fn test_spillman_lock_commitment_path() {
     // deploy contract
     let mut context = Context::default();
-    let contract_bin: Bytes = Loader::default().load_binary("spillman-lock");
-    let out_point = context.deploy_cell(contract_bin);
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let always_success_out_point = context.deploy_cell(ALWAYS_SUCCESS.clone());
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    // Build SpillmanLockArgs according to design doc
+    // struct SpillmanLockArgs {
+    //     merchant_pubkey_hash: [u8; 20],  // 0..20
+    //     user_pubkey_hash: [u8; 20],      // 20..40
+    //     timeout_epoch: [u8; 8],          // 40..48 (u64 little-endian)
+    //     version: u8,                     // 48
+    // }
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false); // 7 days
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),         // 0..20: merchant pubkey hash
+        user_pubkey_hash.as_ref(),             // 20..40: user pubkey hash
+        &timeout_epoch.as_u64().to_le_bytes(), // 40..48: timeout epoch (little-endian)
+        &[version],                            // 48: version
+    ]
+    .concat();
 
     // prepare scripts
     let lock_script = context
-        .build_script(&out_point, Bytes::from(vec![42]))
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
         .expect("script");
+
+    let user_lock_script = context
+        .build_script(&always_success_out_point, Bytes::new())
+        .expect("script");
+    let merchant_lock_script = context
+        .build_script(&always_success_out_point, Bytes::new())
+        .expect("script");
+
+    // prepare cell deps
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
 
     // prepare cells
     let input_out_point = context.create_cell(
         CellOutput::new_builder()
-            .capacity(1000u64.pack())
+            .capacity(1001u64.pack())
             .lock(lock_script.clone())
             .build(),
         Bytes::new(),
     );
+
+    // total capacity = 1001 CKB
+    // input capacity = 1001 CKB
+    // output capacity = user refund 500 CKB + merchant payment 500 CKB = 1000 CKB
+    // fee = 1 CKB
+
     let input = CellInput::new_builder()
         .previous_output(input_out_point)
         .build();
     let outputs = vec![
         CellOutput::new_builder()
             .capacity(500u64.pack())
-            .lock(lock_script.clone())
+            .lock(user_lock_script.clone())
             .build(),
         CellOutput::new_builder()
             .capacity(500u64.pack())
-            .lock(lock_script)
+            .lock(merchant_lock_script)
             .build(),
     ];
 
@@ -49,15 +109,56 @@ fn test_spillman_lock() {
 
     // build transaction
     let tx = TransactionBuilder::default()
+        .cell_deps(cell_deps)
         .input(input)
         .outputs(outputs)
         .outputs_data(outputs_data.pack())
         .build();
     let tx = context.complete_tx(tx);
 
+    let message = compute_signing_message(&tx);
+    let user_signature = user_key.0.sign_recoverable(&message.into()).unwrap().serialize();
+    let merchant_signature = merchant_key.0.sign_recoverable(&message.into()).unwrap().serialize();
+    let witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_COMMITMENT][..],
+        &merchant_signature[..],
+        &user_signature[..],
+    ].concat();
+
+    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+
+
     // run
     let cycles = context
-        .verify_tx(&tx, 10_000_000)
+        .verify_tx(&success_tx, 10_000_000)
         .expect("pass verification");
     println!("consume cycles: {}", cycles);
+
+
+    // wrong user signature should fail verification
+    let wrong_user_signature = [0u8; 65];
+    let wrong_witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_COMMITMENT][..],
+        &merchant_signature[..],
+        &wrong_user_signature[..],
+    ].concat();
+    let fail_tx = tx.as_advanced_builder().witness(wrong_witness.pack()).build();
+
+    // run
+    let err = context
+        .verify_tx(&fail_tx, 10_000_000)
+        .expect_err("wrong user signature should fail verification");
+    println!("error: {:?}", err);
+}
+
+fn compute_signing_message(tx: &TransactionView) -> [u8; 32] {
+    let tx = tx
+        .data()
+        .raw()
+        .as_builder()
+        .cell_deps(Default::default())
+        .build();
+    blake2b_256(tx.as_slice())
 }
