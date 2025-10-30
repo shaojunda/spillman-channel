@@ -24,12 +24,35 @@ jobs:
       run: make prepare
     - name: Build and verify checksums
       run: scripts/reproducible_build_docker
-    - name: Show actual checksums on failure
-      if: failure()
+      continue-on-error: true
+      id: build
+
+    - name: Generate new checksums if verification failed
+      if: steps.build.outcome == 'failure'
       run: |
-        echo "=== Expected checksums ==="
+        echo "Checksum verification failed, generating new checksums..."
+        scripts/reproducible_build_docker --update
+
+    - name: Show checksums
+      if: always()
+      run: |
+        echo "=== Current checksums ==="
         cat checksums.txt
-        echo "=== Actual checksums ==="
-        shasum -a 256 build/release/*
+
+    - name: Upload checksums artifact
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: checksums
+        path: checksums.txt
+
+    - name: Fail if checksums don't match
+      if: steps.build.outcome != 'success'
+      run: |
+        echo "ERROR: Checksums don't match!"
+        echo "Download the 'checksums' artifact and commit it to fix this."
+        exit 1
+
     - name: Run tests
+      if: steps.build.outcome == 'success'
       run: make test
