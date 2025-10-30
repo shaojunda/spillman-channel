@@ -372,6 +372,246 @@ fn test_spillman_lock_timeout_path() {
     println!("error (excessive fee): {:?}", err);
 }
 
+#[test]
+fn test_spillman_lock_timeout_path_with_co_funding() {
+    // Test co-funding scenario: merchant pre-funds their receiving cell capacity
+    // Refund transaction should have 2 outputs:
+    // - Output 0: user gets their funds back
+    // - Output 1: merchant gets their pre-funded capacity back
+
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_epoch.as_u64().to_le_bytes(),
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    // Calculate merchant cell's exact occupied capacity
+    // This is what merchant pre-funds and will get back in refund
+    let merchant_cell = CellOutput::new_builder()
+        .capacity(0u64.pack()) // will calculate
+        .lock(merchant_lock_script.clone())
+        .build();
+    let merchant_occupied = merchant_cell
+        .occupied_capacity(ckb_testtool::ckb_types::core::Capacity::bytes(0).unwrap())
+        .unwrap(); // 0 data size
+    let merchant_capacity_u64: u64 = merchant_occupied.as_u64();
+
+    // Funding cell total: user 1000 CKB + merchant occupied capacity
+    let total_capacity = 100_000_000_000u64 + merchant_capacity_u64;
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(total_capacity.pack())
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let since_value = Since::from_epoch(EpochNumberWithFraction::new(50, 0, 1), false);
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(since_value.as_u64().pack())
+        .build();
+
+    // Co-funding refund: 2 outputs
+    // Output 0: User gets 1000 CKB back (minus fee)
+    // Output 1: Merchant gets exact occupied capacity back
+    // Fee: 1 CKB
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_capacity_u64 - 100_000_000).pack()) // user refund minus fee
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(merchant_capacity_u64.pack()) // exact occupied capacity
+            .lock(merchant_lock_script.clone())
+            .build(),
+    ];
+
+    let outputs_data = vec![Bytes::new(); 2];
+
+    let tx = TransactionBuilder::default()
+        .cell_deps(cell_deps)
+        .input(input.clone())
+        .outputs(outputs)
+        .outputs_data(outputs_data.pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    let message = compute_signing_message(&tx);
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+
+    let witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_TIMEOUT][..],
+        &merchant_signature[..],
+        &user_signature[..],
+    ]
+    .concat();
+
+    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+
+    let cycles = context
+        .verify_tx(&success_tx, 10_000_000)
+        .expect("pass verification");
+    println!("consume cycles (co-funding refund): {}", cycles);
+
+    // Test: wrong merchant output (not merchant's address) should fail
+    let wrong_merchant_lock = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(vec![0u8; 20]).pack()) // wrong pubkey hash
+        .build();
+
+    let wrong_outputs = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_capacity_u64 - 100_000_000).pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(merchant_capacity_u64.pack())
+            .lock(wrong_merchant_lock)
+            .build(),
+    ];
+
+    let wrong_tx_base = TransactionBuilder::default()
+        .cell_deps(tx.cell_deps())
+        .input(input.clone())
+        .outputs(wrong_outputs)
+        .outputs_data(vec![Bytes::new(); 2].pack())
+        .build();
+    let wrong_tx_base = context.complete_tx(wrong_tx_base);
+
+    let wrong_message = compute_signing_message(&wrong_tx_base);
+    let wrong_user_sig = user_key
+        .0
+        .sign_recoverable(&wrong_message.into())
+        .unwrap()
+        .serialize();
+    let wrong_merchant_sig = merchant_key
+        .0
+        .sign_recoverable(&wrong_message.into())
+        .unwrap()
+        .serialize();
+    let wrong_witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_TIMEOUT][..],
+        &wrong_merchant_sig[..],
+        &wrong_user_sig[..],
+    ]
+    .concat();
+
+    let wrong_tx = wrong_tx_base
+        .as_advanced_builder()
+        .witness(wrong_witness.pack())
+        .build();
+
+    let err = context
+        .verify_tx(&wrong_tx, 10_000_000)
+        .expect_err("wrong merchant output should fail verification");
+    println!("error (wrong merchant output): {:?}", err);
+
+    // Test: merchant capacity exceeds occupied capacity should fail
+    let excessive_capacity = merchant_capacity_u64 + 100_000_000; // 1 CKB more than needed
+    let excessive_outputs = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - excessive_capacity - 100_000_000).pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(excessive_capacity.pack()) // merchant takes more than needed!
+            .lock(merchant_lock_script.clone())
+            .build(),
+    ];
+
+    let excessive_tx_base = TransactionBuilder::default()
+        .cell_deps(tx.cell_deps())
+        .input(input.clone())
+        .outputs(excessive_outputs)
+        .outputs_data(vec![Bytes::new(); 2].pack())
+        .build();
+    let excessive_tx_base = context.complete_tx(excessive_tx_base);
+
+    let excessive_message = compute_signing_message(&excessive_tx_base);
+    let excessive_user_sig = user_key
+        .0
+        .sign_recoverable(&excessive_message.into())
+        .unwrap()
+        .serialize();
+    let excessive_merchant_sig = merchant_key
+        .0
+        .sign_recoverable(&excessive_message.into())
+        .unwrap()
+        .serialize();
+    let excessive_witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_TIMEOUT][..],
+        &excessive_merchant_sig[..],
+        &excessive_user_sig[..],
+    ]
+    .concat();
+
+    let excessive_tx = excessive_tx_base
+        .as_advanced_builder()
+        .witness(excessive_witness.pack())
+        .build();
+
+    let err = context
+        .verify_tx(&excessive_tx, 10_000_000)
+        .expect_err("excessive merchant capacity should fail verification");
+    println!("error (excessive merchant capacity): {:?}", err);
+}
+
 fn compute_signing_message(tx: &TransactionView) -> [u8; 32] {
     let tx = tx
         .data()

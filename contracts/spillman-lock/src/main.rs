@@ -21,14 +21,14 @@ use ckb_std::{
     ckb_constants::Source,
     ckb_types::{
         bytes::Bytes,
-        core::ScriptHashType,
+        core::{ScriptHashType},
         packed::{Script, Transaction},
         prelude::*,
     },
     error::SysError,
     high_level::{
-        load_cell, load_cell_capacity, load_cell_data, load_input_since, load_script,
-        load_transaction, load_witness, spawn_cell, QueryIter,
+        load_cell, load_cell_capacity, load_cell_data, load_cell_occupied_capacity,
+        load_input_since, load_script, load_transaction, load_witness, spawn_cell, QueryIter,
     },
     since::Since,
     syscalls::wait,
@@ -61,6 +61,7 @@ pub enum Error {
     ExcessiveFee,
     TypeScriptMismatch,
     XudtAmountMismatch,
+    MerchantCapacityExcessive,
 }
 
 impl From<SysError> for Error {
@@ -353,7 +354,7 @@ fn verify_refund_output_structure(
         return Err(Error::UserPubkeyHashMismatch);
     }
 
-    // 2. If there's Output 1, verify it's merchant address
+    // 2. If there's Output 1, verify it's merchant address and capacity is exact
     if outputs.len() == 2 {
         let merchant_output = outputs.get(1).unwrap();
         let expected_merchant_lock = Script::new_builder()
@@ -364,6 +365,15 @@ fn verify_refund_output_structure(
 
         if merchant_output.lock().calc_script_hash() != expected_merchant_lock.calc_script_hash() {
             return Err(Error::MerchantPubkeyHashMismatch);
+        }
+
+        // Verify merchant output capacity equals exactly the occupied capacity
+        // Merchant can only take back what's needed for cell occupation (no more, no less)
+        let min_capacity = load_cell_occupied_capacity(1, Source::Output)?;
+        let actual_capacity: u64 = merchant_output.capacity().unpack();
+
+        if actual_capacity != min_capacity {
+            return Err(Error::MerchantCapacityExcessive);
         }
     }
 
