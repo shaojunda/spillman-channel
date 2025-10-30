@@ -612,6 +612,503 @@ fn test_spillman_lock_timeout_path_with_co_funding() {
     println!("error (excessive merchant capacity): {:?}", err);
 }
 
+#[test]
+fn test_spillman_lock_timeout_path_with_xudt() {
+    // Test xUDT channel refund: user gets all xUDT back
+
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let simple_udt_bin: Bytes = loader.load_binary("../../deps/simple_udt");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+    let simple_udt_out_point = context.deploy_cell(simple_udt_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_epoch.as_u64().to_le_bytes(),
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    // Create xUDT type script with owner lock hash
+    let udt_owner_lock_hash = [42u8; 32];
+    let type_script = context
+        .build_script(&simple_udt_out_point, udt_owner_lock_hash.to_vec().into())
+        .expect("script");
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let simple_udt_dep = CellDep::new_builder()
+        .out_point(simple_udt_out_point)
+        .build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep, simple_udt_dep].pack();
+
+    // xUDT amount: 1000 tokens
+    let xudt_amount = 1000u128;
+
+    // Create Spillman Lock cell with xUDT
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack()) // 1001 CKB
+            .lock(lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        xudt_amount.to_le_bytes().to_vec().into(),
+    );
+
+    let since_value = Since::from_epoch(EpochNumberWithFraction::new(50, 0, 1), false);
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(since_value.as_u64().pack())
+        .build();
+
+    // Refund: user gets all xUDT back
+    let outputs = vec![CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack()) // 1000 CKB refund to user, 1 CKB fee
+        .lock(user_lock_script.clone())
+        .type_(Some(type_script.clone()).pack())
+        .build()];
+
+    let outputs_data: Vec<Bytes> = vec![xudt_amount.to_le_bytes().to_vec().into()];
+
+    let tx = TransactionBuilder::default()
+        .cell_deps(cell_deps.clone())
+        .input(input.clone())
+        .outputs(outputs)
+        .outputs_data(outputs_data.pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    let message = compute_signing_message(&tx);
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+
+    let witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_TIMEOUT][..],
+        &merchant_signature[..],
+        &user_signature[..],
+    ]
+    .concat();
+
+    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+
+    let cycles = context
+        .verify_tx(&success_tx, 10_000_000)
+        .expect("pass verification");
+    println!("consume cycles (xUDT refund): {}", cycles);
+
+    // Test: wrong xUDT amount (user doesn't get all) should fail
+    let wrong_xudt_amount = 500u128; // only half!
+    let wrong_outputs = vec![CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack())
+        .lock(user_lock_script.clone())
+        .type_(Some(type_script.clone()).pack())
+        .build()];
+
+    let wrong_outputs_data: Vec<Bytes> = vec![wrong_xudt_amount.to_le_bytes().to_vec().into()];
+
+    let wrong_tx_base = TransactionBuilder::default()
+        .cell_deps(cell_deps.clone())
+        .input(input.clone())
+        .outputs(wrong_outputs)
+        .outputs_data(wrong_outputs_data.pack())
+        .build();
+    let wrong_tx_base = context.complete_tx(wrong_tx_base);
+
+    let wrong_message = compute_signing_message(&wrong_tx_base);
+    let wrong_user_sig = user_key
+        .0
+        .sign_recoverable(&wrong_message.into())
+        .unwrap()
+        .serialize();
+    let wrong_merchant_sig = merchant_key
+        .0
+        .sign_recoverable(&wrong_message.into())
+        .unwrap()
+        .serialize();
+    let wrong_witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_TIMEOUT][..],
+        &wrong_merchant_sig[..],
+        &wrong_user_sig[..],
+    ]
+    .concat();
+
+    let wrong_tx = wrong_tx_base
+        .as_advanced_builder()
+        .witness(wrong_witness.pack())
+        .build();
+
+    let err = context
+        .verify_tx(&wrong_tx, 10_000_000)
+        .expect_err("wrong xUDT amount should fail verification");
+    println!("error (wrong xUDT amount): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
+    // Test xUDT channel with co-funding refund
+    // User gets all xUDT, merchant gets capacity back with 0 xUDT
+
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let simple_udt_bin: Bytes = loader.load_binary("../../deps/simple_udt");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+    let simple_udt_out_point = context.deploy_cell(simple_udt_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_epoch.as_u64().to_le_bytes(),
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    // Create xUDT type script
+    let udt_owner_lock_hash = [42u8; 32];
+    let type_script = context
+        .build_script(&simple_udt_out_point.clone(), udt_owner_lock_hash.to_vec().into())
+        .expect("script");
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let simple_udt_dep = CellDep::new_builder()
+        .out_point(simple_udt_out_point.clone())
+        .build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep, simple_udt_dep].pack();
+
+    // Calculate merchant cell's exact occupied capacity with xUDT type script
+    let merchant_cell = CellOutput::new_builder()
+        .capacity(0u64.pack())
+        .lock(merchant_lock_script.clone())
+        .type_(Some(type_script.clone()).pack())
+        .build();
+    let merchant_occupied = merchant_cell
+        .occupied_capacity(ckb_testtool::ckb_types::core::Capacity::bytes(16).unwrap()) // 16 bytes for u128
+        .unwrap();
+    let merchant_capacity_u64: u64 = merchant_occupied.as_u64();
+
+    let xudt_amount = 1000u128;
+    let total_capacity = 100_000_000_000u64 + merchant_capacity_u64;
+
+    // Create Spillman Lock cell with xUDT
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(total_capacity.pack())
+            .lock(lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        xudt_amount.to_le_bytes().to_vec().into(),
+    );
+
+    let since_value = Since::from_epoch(EpochNumberWithFraction::new(50, 0, 1), false);
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(since_value.as_u64().pack())
+        .build();
+
+    // Co-funding refund with xUDT:
+    // Output 0: User gets all xUDT (1000 tokens)
+    // Output 1: Merchant gets capacity back with 0 xUDT
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_capacity_u64 - 100_000_000).pack())
+            .lock(user_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(merchant_capacity_u64.pack())
+            .lock(merchant_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+    ];
+
+    let outputs_data: Vec<Bytes> = vec![
+        xudt_amount.to_le_bytes().to_vec().into(), // user gets all xUDT
+        0u128.to_le_bytes().to_vec().into(),       // merchant gets 0 xUDT
+    ];
+
+    let tx = TransactionBuilder::default()
+        .cell_deps(cell_deps.clone())
+        .input(input.clone())
+        .outputs(outputs)
+        .outputs_data(outputs_data.pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    let message = compute_signing_message(&tx);
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+
+    let witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_TIMEOUT][..],
+        &merchant_signature[..],
+        &user_signature[..],
+    ]
+    .concat();
+
+    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+
+    let cycles = context
+        .verify_tx(&success_tx, 10_000_000)
+        .expect("pass verification");
+    println!("consume cycles (xUDT co-funding refund): {}", cycles);
+
+    // Test 1: user output missing type script should fail
+    let wrong_outputs_1 = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_capacity_u64 - 100_000_000).pack())
+            .lock(user_lock_script.clone())
+            // Missing type script!
+            .build(),
+        CellOutput::new_builder()
+            .capacity(merchant_capacity_u64.pack())
+            .lock(merchant_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+    ];
+
+    let wrong_outputs_data_1: Vec<Bytes> = vec![
+        Bytes::new(), // no xUDT data
+        0u128.to_le_bytes().to_vec().into(),
+    ];
+
+    let wrong_tx_1 = build_and_sign_tx(
+        &mut context,
+        &tx,
+        &input,
+        wrong_outputs_1,
+        wrong_outputs_data_1,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&wrong_tx_1, 10_000_000)
+        .expect_err("user output missing type script should fail");
+    println!("error (user missing type script): {:?}", err);
+
+    // Test 2: merchant output missing type script should fail
+    let wrong_outputs_2 = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_capacity_u64 - 100_000_000).pack())
+            .lock(user_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(merchant_capacity_u64.pack())
+            .lock(merchant_lock_script.clone())
+            // Missing type script!
+            .build(),
+    ];
+
+    let wrong_outputs_data_2: Vec<Bytes> = vec![
+        xudt_amount.to_le_bytes().to_vec().into(),
+        Bytes::new(), // no xUDT data
+    ];
+
+    let wrong_tx_2 = build_and_sign_tx(
+        &mut context,
+        &tx,
+        &input,
+        wrong_outputs_2,
+        wrong_outputs_data_2,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&wrong_tx_2, 10_000_000)
+        .expect_err("merchant output missing type script should fail");
+    println!("error (merchant missing type script): {:?}", err);
+
+    // Test 3: different type script should fail
+    let different_type_script = context
+        .build_script(&simple_udt_out_point.clone(), vec![99u8; 32].into())
+        .expect("script");
+
+    let wrong_outputs_3 = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_capacity_u64 - 100_000_000).pack())
+            .lock(user_lock_script.clone())
+            .type_(Some(different_type_script.clone()).pack()) // Different type script!
+            .build(),
+        CellOutput::new_builder()
+            .capacity(merchant_capacity_u64.pack())
+            .lock(merchant_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+    ];
+
+    let wrong_outputs_data_3: Vec<Bytes> = vec![
+        xudt_amount.to_le_bytes().to_vec().into(),
+        0u128.to_le_bytes().to_vec().into(),
+    ];
+
+    let wrong_tx_3 = build_and_sign_tx(
+        &mut context,
+        &tx,
+        &input,
+        wrong_outputs_3,
+        wrong_outputs_data_3,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&wrong_tx_3, 10_000_000)
+        .expect_err("different type script should fail");
+    println!("error (different type script): {:?}", err);
+
+    // Test 4: merchant xUDT amount not zero should fail
+    let wrong_outputs_4 = vec![
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_capacity_u64 - 100_000_000).pack())
+            .lock(user_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(merchant_capacity_u64.pack())
+            .lock(merchant_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+    ];
+
+    let wrong_outputs_data_4: Vec<Bytes> = vec![
+        500u128.to_le_bytes().to_vec().into(), // user gets half
+        500u128.to_le_bytes().to_vec().into(), // merchant gets half (should be 0!)
+    ];
+
+    let wrong_tx_4 = build_and_sign_tx(
+        &mut context,
+        &tx,
+        &input,
+        wrong_outputs_4,
+        wrong_outputs_data_4,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&wrong_tx_4, 10_000_000)
+        .expect_err("merchant xUDT amount not zero should fail");
+    println!("error (merchant xUDT not zero): {:?}", err);
+}
+
+// Helper function to build and sign transaction
+fn build_and_sign_tx(
+    context: &mut Context,
+    base_tx: &TransactionView,
+    input: &CellInput,
+    outputs: Vec<CellOutput>,
+    outputs_data: Vec<Bytes>,
+    user_key: &(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey),
+    merchant_key: &(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey),
+) -> TransactionView {
+    let tx_base = TransactionBuilder::default()
+        .cell_deps(base_tx.cell_deps())
+        .input(input.clone())
+        .outputs(outputs)
+        .outputs_data(outputs_data.pack())
+        .build();
+    let tx_base = context.complete_tx(tx_base);
+
+    let message = compute_signing_message(&tx_base);
+    let user_sig = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_sig = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_TIMEOUT][..],
+        &merchant_sig[..],
+        &user_sig[..],
+    ]
+    .concat();
+
+    tx_base.as_advanced_builder().witness(witness.pack()).build()
+}
+
 fn compute_signing_message(tx: &TransactionView) -> [u8; 32] {
     let tx = tx
         .data()
