@@ -118,35 +118,23 @@ fn test_spillman_lock_commitment_path() {
 
     let outputs_data = vec![Bytes::new(); 2];
 
-    // build transaction
+    // build transaction (base tx without witness)
     let tx = TransactionBuilder::default()
-        .cell_deps(cell_deps)
-        .input(input)
-        .outputs(outputs)
-        .outputs_data(outputs_data.pack())
+        .cell_deps(cell_deps.clone())
+        .input(input.clone())
+        .outputs(outputs.clone())
+        .outputs_data(outputs_data.clone().pack())
         .build();
-    let tx = context.complete_tx(tx);
 
-    let message = compute_signing_message(&tx);
-    let user_signature = user_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-    let merchant_signature = merchant_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-    let witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_COMMITMENT][..],
-        &merchant_signature[..],
-        &user_signature[..],
-    ]
-    .concat();
-
-    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+    let success_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
 
     // run
     let cycles = context
@@ -156,6 +144,11 @@ fn test_spillman_lock_commitment_path() {
 
     // wrong user signature should fail verification
     let wrong_user_signature = [0u8; 65];
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&compute_signing_message(&tx).into())
+        .unwrap()
+        .serialize();
     let wrong_witness = [
         &EMPTY_WITNESS_ARGS[..],
         &[UNLOCK_TYPE_COMMITMENT][..],
@@ -248,36 +241,15 @@ fn test_spillman_lock_timeout_path() {
     let outputs_data = vec![Bytes::new(); 1];
 
     // build transaction
-    let tx = TransactionBuilder::default()
-        .cell_deps(cell_deps)
-        .input(input.clone())
-        .outputs(outputs)
-        .outputs_data(outputs_data.pack())
-        .build();
-    let tx = context.complete_tx(tx);
-
-    let message = compute_signing_message(&tx);
-    let user_signature = user_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-    let merchant_signature = merchant_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-
-    // For timeout path: witness format is the same, but unlock_type is UNLOCK_TYPE_TIMEOUT
-    let witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &merchant_signature[..],
-        &user_signature[..],
-    ]
-    .concat();
-
-    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+    let success_tx = build_and_sign_tx(
+        cell_deps,
+        input.clone(),
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     // run
     let cycles = context
@@ -307,6 +279,16 @@ fn test_spillman_lock_timeout_path() {
 
     // Test: invalid unlock type should fail
     let invalid_unlock_type = 0x02; // not COMMITMENT(0x00) or TIMEOUT(0x01)
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&compute_signing_message(&success_tx).into())
+        .unwrap()
+        .serialize();
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&compute_signing_message(&success_tx).into())
+        .unwrap()
+        .serialize();
     let invalid_witness = [
         &EMPTY_WITNESS_ARGS[..],
         &[invalid_unlock_type][..],
@@ -333,38 +315,15 @@ fn test_spillman_lock_timeout_path() {
         .lock(user_lock_script.clone())
         .build();
 
-    let excessive_fee_base_tx = TransactionBuilder::default()
-        .cell_deps(tx.cell_deps())
-        .input(input.clone())
-        .output(small_output)
-        .output_data(Bytes::new().pack())
-        .build();
-    let excessive_fee_base_tx = context.complete_tx(excessive_fee_base_tx);
-
-    // Re-sign with the new transaction message
-    let excessive_fee_message = compute_signing_message(&excessive_fee_base_tx);
-    let excessive_fee_user_sig = user_key
-        .0
-        .sign_recoverable(&excessive_fee_message.into())
-        .unwrap()
-        .serialize();
-    let excessive_fee_merchant_sig = merchant_key
-        .0
-        .sign_recoverable(&excessive_fee_message.into())
-        .unwrap()
-        .serialize();
-    let excessive_fee_witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &excessive_fee_merchant_sig[..],
-        &excessive_fee_user_sig[..],
-    ]
-    .concat();
-
-    let excessive_fee_tx = excessive_fee_base_tx
-        .as_advanced_builder()
-        .witness(excessive_fee_witness.pack())
-        .build();
+    let excessive_fee_tx = build_and_sign_tx(
+        success_tx.cell_deps(),
+        input.clone(),
+        vec![small_output],
+        vec![Bytes::new()],
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     let err = context
         .verify_tx(&excessive_fee_tx, 10_000_000)
@@ -471,35 +430,15 @@ fn test_spillman_lock_timeout_path_with_co_funding() {
 
     let outputs_data = vec![Bytes::new(); 2];
 
-    let tx = TransactionBuilder::default()
-        .cell_deps(cell_deps)
-        .input(input.clone())
-        .outputs(outputs)
-        .outputs_data(outputs_data.pack())
-        .build();
-    let tx = context.complete_tx(tx);
-
-    let message = compute_signing_message(&tx);
-    let user_signature = user_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-    let merchant_signature = merchant_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-
-    let witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &merchant_signature[..],
-        &user_signature[..],
-    ]
-    .concat();
-
-    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+    let success_tx = build_and_sign_tx(
+        cell_deps,
+        input.clone(),
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     let cycles = context
         .verify_tx(&success_tx, 10_000_000)
@@ -524,37 +463,15 @@ fn test_spillman_lock_timeout_path_with_co_funding() {
             .build(),
     ];
 
-    let wrong_tx_base = TransactionBuilder::default()
-        .cell_deps(tx.cell_deps())
-        .input(input.clone())
-        .outputs(wrong_outputs)
-        .outputs_data(vec![Bytes::new(); 2].pack())
-        .build();
-    let wrong_tx_base = context.complete_tx(wrong_tx_base);
-
-    let wrong_message = compute_signing_message(&wrong_tx_base);
-    let wrong_user_sig = user_key
-        .0
-        .sign_recoverable(&wrong_message.into())
-        .unwrap()
-        .serialize();
-    let wrong_merchant_sig = merchant_key
-        .0
-        .sign_recoverable(&wrong_message.into())
-        .unwrap()
-        .serialize();
-    let wrong_witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &wrong_merchant_sig[..],
-        &wrong_user_sig[..],
-    ]
-    .concat();
-
-    let wrong_tx = wrong_tx_base
-        .as_advanced_builder()
-        .witness(wrong_witness.pack())
-        .build();
+    let wrong_tx = build_and_sign_tx(
+        success_tx.cell_deps(),
+        input.clone(),
+        wrong_outputs,
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     let err = context
         .verify_tx(&wrong_tx, 10_000_000)
@@ -574,37 +491,15 @@ fn test_spillman_lock_timeout_path_with_co_funding() {
             .build(),
     ];
 
-    let excessive_tx_base = TransactionBuilder::default()
-        .cell_deps(tx.cell_deps())
-        .input(input.clone())
-        .outputs(excessive_outputs)
-        .outputs_data(vec![Bytes::new(); 2].pack())
-        .build();
-    let excessive_tx_base = context.complete_tx(excessive_tx_base);
-
-    let excessive_message = compute_signing_message(&excessive_tx_base);
-    let excessive_user_sig = user_key
-        .0
-        .sign_recoverable(&excessive_message.into())
-        .unwrap()
-        .serialize();
-    let excessive_merchant_sig = merchant_key
-        .0
-        .sign_recoverable(&excessive_message.into())
-        .unwrap()
-        .serialize();
-    let excessive_witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &excessive_merchant_sig[..],
-        &excessive_user_sig[..],
-    ]
-    .concat();
-
-    let excessive_tx = excessive_tx_base
-        .as_advanced_builder()
-        .witness(excessive_witness.pack())
-        .build();
+    let excessive_tx = build_and_sign_tx(
+        success_tx.cell_deps(),
+        input.clone(),
+        excessive_outputs,
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     let err = context
         .verify_tx(&excessive_tx, 10_000_000)
@@ -696,35 +591,15 @@ fn test_spillman_lock_timeout_path_with_xudt() {
 
     let outputs_data: Vec<Bytes> = vec![xudt_amount.to_le_bytes().to_vec().into()];
 
-    let tx = TransactionBuilder::default()
-        .cell_deps(cell_deps.clone())
-        .input(input.clone())
-        .outputs(outputs)
-        .outputs_data(outputs_data.pack())
-        .build();
-    let tx = context.complete_tx(tx);
-
-    let message = compute_signing_message(&tx);
-    let user_signature = user_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-    let merchant_signature = merchant_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-
-    let witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &merchant_signature[..],
-        &user_signature[..],
-    ]
-    .concat();
-
-    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+    let success_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     let cycles = context
         .verify_tx(&success_tx, 10_000_000)
@@ -741,37 +616,15 @@ fn test_spillman_lock_timeout_path_with_xudt() {
 
     let wrong_outputs_data: Vec<Bytes> = vec![wrong_xudt_amount.to_le_bytes().to_vec().into()];
 
-    let wrong_tx_base = TransactionBuilder::default()
-        .cell_deps(cell_deps.clone())
-        .input(input.clone())
-        .outputs(wrong_outputs)
-        .outputs_data(wrong_outputs_data.pack())
-        .build();
-    let wrong_tx_base = context.complete_tx(wrong_tx_base);
-
-    let wrong_message = compute_signing_message(&wrong_tx_base);
-    let wrong_user_sig = user_key
-        .0
-        .sign_recoverable(&wrong_message.into())
-        .unwrap()
-        .serialize();
-    let wrong_merchant_sig = merchant_key
-        .0
-        .sign_recoverable(&wrong_message.into())
-        .unwrap()
-        .serialize();
-    let wrong_witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &wrong_merchant_sig[..],
-        &wrong_user_sig[..],
-    ]
-    .concat();
-
-    let wrong_tx = wrong_tx_base
-        .as_advanced_builder()
-        .witness(wrong_witness.pack())
-        .build();
+    let wrong_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        wrong_outputs,
+        wrong_outputs_data,
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     let err = context
         .verify_tx(&wrong_tx, 10_000_000)
@@ -893,35 +746,15 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
         0u128.to_le_bytes().to_vec().into(),       // merchant gets 0 xUDT
     ];
 
-    let tx = TransactionBuilder::default()
-        .cell_deps(cell_deps.clone())
-        .input(input.clone())
-        .outputs(outputs)
-        .outputs_data(outputs_data.pack())
-        .build();
-    let tx = context.complete_tx(tx);
-
-    let message = compute_signing_message(&tx);
-    let user_signature = user_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-    let merchant_signature = merchant_key
-        .0
-        .sign_recoverable(&message.into())
-        .unwrap()
-        .serialize();
-
-    let witness = [
-        &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &merchant_signature[..],
-        &user_signature[..],
-    ]
-    .concat();
-
-    let success_tx = tx.as_advanced_builder().witness(witness.pack()).build();
+    let success_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
 
     let cycles = context
         .verify_tx(&success_tx, 10_000_000)
@@ -948,10 +781,11 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_1 = build_and_sign_tx(
-        &tx,
-        &input,
+        cell_deps.clone(),
+        input.clone(),
         wrong_outputs_1,
         wrong_outputs_data_1,
+        UNLOCK_TYPE_TIMEOUT,
         &user_key,
         &merchant_key,
     );
@@ -981,10 +815,11 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_2 = build_and_sign_tx(
-        &tx,
-        &input,
+        cell_deps.clone(),
+        input.clone(),
         wrong_outputs_2,
         wrong_outputs_data_2,
+        UNLOCK_TYPE_TIMEOUT,
         &user_key,
         &merchant_key,
     );
@@ -1018,10 +853,11 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_3 = build_and_sign_tx(
-        &tx,
-        &input,
+        cell_deps.clone(),
+        input.clone(),
         wrong_outputs_3,
         wrong_outputs_data_3,
+        UNLOCK_TYPE_TIMEOUT,
         &user_key,
         &merchant_key,
     );
@@ -1051,10 +887,11 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_4 = build_and_sign_tx(
-        &tx,
-        &input,
+        cell_deps.clone(),
+        input.clone(),
         wrong_outputs_4,
         wrong_outputs_data_4,
+        UNLOCK_TYPE_TIMEOUT,
         &user_key,
         &merchant_key,
     );
@@ -1066,42 +903,42 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
 }
 
 // Helper function to build and sign transaction
-// Note: base_tx should already be completed (with cell_deps properly set)
 fn build_and_sign_tx(
-    base_tx: &TransactionView,
-    input: &CellInput,
+    cell_deps: CellDepVec,
+    input: CellInput,
     outputs: Vec<CellOutput>,
     outputs_data: Vec<Bytes>,
+    unlock_type: u8,
     user_key: &(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey),
     merchant_key: &(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey),
 ) -> TransactionView {
-    let tx_base = TransactionBuilder::default()
-        .cell_deps(base_tx.cell_deps())
-        .input(input.clone())
+    let tx = TransactionBuilder::default()
+        .cell_deps(cell_deps)
+        .input(input)
         .outputs(outputs)
         .outputs_data(outputs_data.pack())
         .build();
 
-    let message = compute_signing_message(&tx_base);
-    let user_sig = user_key
+    let message = compute_signing_message(&tx);
+    let user_signature = user_key
         .0
         .sign_recoverable(&message.into())
         .unwrap()
         .serialize();
-    let merchant_sig = merchant_key
+    let merchant_signature = merchant_key
         .0
         .sign_recoverable(&message.into())
         .unwrap()
         .serialize();
     let witness = [
         &EMPTY_WITNESS_ARGS[..],
-        &[UNLOCK_TYPE_TIMEOUT][..],
-        &merchant_sig[..],
-        &user_sig[..],
+        &[unlock_type][..],
+        &merchant_signature[..],
+        &user_signature[..],
     ]
     .concat();
 
-    tx_base.as_advanced_builder().witness(witness.pack()).build()
+    tx.as_advanced_builder().witness(witness.pack()).build()
 }
 
 fn compute_signing_message(tx: &TransactionView) -> [u8; 32] {
