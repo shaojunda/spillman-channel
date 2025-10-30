@@ -1,0 +1,22 @@
+[package]
+name = "spillman-channel-examples"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "full_flow"
+path = "src/full_flow.rs"
+
+[dependencies]
+ckb-sdk = "4.4.0"
+ckb-types = "0.203.0"
+ckb-jsonrpc-types = "0.203.0"
+ckb-crypto = { version = "0.203.0", features = ["secp"] }
+ckb-hash = "1.0.0"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
+tokio = { version = "1", features = ["full"] }
+toml = "0.9.8"
+
