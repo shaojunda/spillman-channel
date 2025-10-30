@@ -22,7 +22,14 @@ jobs:
         version: "16"
     - name: Prepare
       run: make prepare
-    - name: Build
+    - name: Build and verify checksums
       run: scripts/reproducible_build_docker
+    - name: Show actual checksums on failure
+      if: failure()
+      run: |
+        echo "=== Expected checksums ==="
+        cat checksums.txt
+        echo "=== Actual checksums ==="
+        shasum -a 256 build/release/*
     - name: Run tests
       run: make test
