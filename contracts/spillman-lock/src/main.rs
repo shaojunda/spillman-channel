@@ -91,38 +91,49 @@ const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16,
 const AUTH_ALGORITHM_CKB: u8 = 0;          // CKB/SECP256K1 single-sig
 const AUTH_ALGORITHM_CKB_MULTISIG: u8 = 6; // CKB multisig
 
-// Script args layout (variable length):
-// Single-sig: [merchant_pubkey_hash(20)] + [user_pubkey_hash(20)] + [timeout(8)] + [version(1)] = 49 bytes
-// Multi-sig: [multisig_script(4+20*N)] + [user_pubkey_hash(20)] + [timeout(8)] + [version(1)] = 33+20*N bytes
-//   multisig_script format: S | R | M | N | PubKeyHash1 | PubKeyHash2 | ...
-//   S = format_version (1 byte, set to 0)
-//   R = first_n (1 byte, at least R signatures must match first R pubkeys, usually 0)
-//   M = threshold (1 byte, require M signatures)
-//   N = pubkey_cnt (1 byte, total N pubkeys)
-const MERCHANT_PUBKEY_HASH_LEN: usize = 20;
+// Script args layout (fixed 50 bytes):
+// [merchant_lock_arg(20)] + [user_pubkey_hash(20)] + [timeout(8)] + [algorithm_id(1)] + [version(1)]
+//
+// Fields:
+//   merchant_lock_arg: 20 bytes
+//     - Single-sig (algorithm_id=0): blake160(pubkey)
+//     - Multi-sig (algorithm_id=6): blake160(multisig_config)
+//       multisig_config format: S | R | M | N | PubKeyHash1 | PubKeyHash2 | ...
+//         S = format_version (1 byte, set to 0)
+//         R = first_n (1 byte, at least R signatures must match first R pubkeys)
+//         M = threshold (1 byte, require M signatures)
+//         N = pubkey_cnt (1 byte, total N pubkeys)
+//         PubKeyHashX = blake160(pubkey) (20 bytes each)
+//   user_pubkey_hash: 20 bytes - blake160(user_pubkey)
+//   timeout: 8 bytes - epoch number (little-endian u64)
+//   algorithm_id: 1 byte - 0 for single-sig, 6 for multi-sig
+//   version: 1 byte - set to 0
+const MERCHANT_LOCK_ARG_LEN: usize = 20;
 const USER_PUBKEY_HASH_LEN: usize = 20;
 const TIMEOUT_EPOCH_LEN: usize = 8;
+const ALGORITHM_ID_LEN: usize = 1;
 const VERSION_LEN: usize = 1;
 const MULTISIG_HEADER_LEN: usize = 4; // S + R + M + N
-const SINGLE_SIG_ARGS_LEN: usize =
-    MERCHANT_PUBKEY_HASH_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN; // 49 bytes
-const MIN_MULTISIG_ARGS_LEN: usize =
-    MULTISIG_HEADER_LEN + MERCHANT_PUBKEY_HASH_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN; // 53 bytes (1 pubkey)
+const ARGS_LEN: usize =
+    MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + ALGORITHM_ID_LEN + VERSION_LEN; // 50 bytes
 
-// Script args field offsets
-const MERCHANT_PUBKEY_HASH_OFFSET: usize = 0;
-const USER_PUBKEY_HASH_OFFSET: usize = MERCHANT_PUBKEY_HASH_OFFSET + MERCHANT_PUBKEY_HASH_LEN; // 20
-const TIMEOUT_EPOCH_OFFSET: usize = USER_PUBKEY_HASH_OFFSET + USER_PUBKEY_HASH_LEN; // 40
-const VERSION_OFFSET: usize = TIMEOUT_EPOCH_OFFSET + TIMEOUT_EPOCH_LEN; // 48
+// Script args field offsets (removed - use direct indexing)
 
 // Unlock type layout: [unlock_type(1)]
 const UNLOCK_TYPE_COMMITMENT: u8 = 0x00; // Commitment Path
 const UNLOCK_TYPE_TIMEOUT: u8 = 0x01; // Timeout Path
 const UNLOCK_TYPE_LEN: usize = 1;
 
-// Witness layout: [empty_witness_args(16)] + [unlock_type(1)] + [merchant_signature(65)] + [user_signature(65)]
-const SIGNATURE_LEN: usize = 65; // Both merchant and user signatures are 65 bytes
-const TOTAL_SIGNATURE_LEN: usize = SIGNATURE_LEN * 2;
+// Witness layout:
+// Single-sig (algorithm_id=0):
+//   [empty_witness_args(16)] + [unlock_type(1)] + [merchant_signature(65)] + [user_signature(65)]
+//   Total: 16 + 1 + 65 + 65 = 147 bytes
+//
+// Multi-sig (algorithm_id=6):
+//   [empty_witness_args(16)] + [unlock_type(1)] + [multisig_config(4+N*20)] + [merchant_signatures(M*65)] + [user_signature(65)]
+//   multisig_config: S(1) + R(1) + M(1) + N(1) + PubKeyHash1(20) + ... + PubKeyHashN(20)
+//   Total: 16 + 1 + (4+N*20) + M*65 + 65
+const SIGNATURE_LEN: usize = 65; // Each signature is 65 bytes
 
 // Maximum allowed transaction fee (1 CKB = 100,000,000 shannons)
 const MAX_FEE: u64 = 100_000_000;
@@ -159,41 +170,23 @@ fn verify() -> Result<(), Error> {
     let script = load_script()?;
     let args: Bytes = script.args().unpack();
 
-    // Parse merchant lock arg based on args length
-    let (merchant_algorithm_id, merchant_lock_arg, merchant_len) = if args.len() == SINGLE_SIG_ARGS_LEN {
-        // Single-sig: merchant_pubkey_hash (20 bytes)
-        (AUTH_ALGORITHM_CKB, &args[0..MERCHANT_PUBKEY_HASH_LEN], MERCHANT_PUBKEY_HASH_LEN)
-    } else if args.len() >= MIN_MULTISIG_ARGS_LEN {
-        // Multi-sig: parse multisig script
-        if args[0] != 0 {
-            // format_version must be 0
-            return Err(Error::InvalidMultisigConfig);
-        }
-
-        let pubkey_cnt = args[3] as usize;
-        let multisig_len = MULTISIG_HEADER_LEN + pubkey_cnt * MERCHANT_PUBKEY_HASH_LEN;
-
-        if args.len() != multisig_len + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN {
-            return Err(Error::InvalidMultisigConfig);
-        }
-
-        (AUTH_ALGORITHM_CKB_MULTISIG, &args[0..multisig_len], multisig_len)
-    } else {
+    // Verify args length (fixed 50 bytes)
+    if args.len() != ARGS_LEN {
         return Err(Error::ArgsLenError);
-    };
+    }
 
-    // Parse remaining fields
-    let user_offset = merchant_len;
-    let timeout_offset = user_offset + USER_PUBKEY_HASH_LEN;
-    let version_offset = timeout_offset + TIMEOUT_EPOCH_LEN;
-
-    let user_pubkey_hash = &args[user_offset..timeout_offset];
+    // Parse args fields
+    let merchant_lock_arg = &args[0..MERCHANT_LOCK_ARG_LEN];
+    let user_pubkey_hash = &args[MERCHANT_LOCK_ARG_LEN..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN];
     let timeout_epoch = u64::from_le_bytes(
-        args[timeout_offset..version_offset]
+        args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN
+            ..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN]
             .try_into()
             .unwrap(),
     );
-    let version = args[version_offset];
+    let algorithm_id = args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN];
+    let version =
+        args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + ALGORITHM_ID_LEN];
 
     if version != 0 {
         return Err(Error::UnsupportedVersion);
@@ -201,10 +194,58 @@ fn verify() -> Result<(), Error> {
 
     let unlock_type = witness.remove(0);
 
+    // Determine merchant signature type based on algorithm_id
+    // After removing empty_witness_args(16) and unlock_type(1), remaining witness is:
+    // - Single-sig (algorithm_id=0): merchant_sig(65) + user_sig(65) = 130 bytes
+    // - Multi-sig (algorithm_id=6): multisig_config(4+N*20) + merchant_sigs(M*65) + user_sig(65)
+    let (merchant_algorithm_id, merchant_lock_arg_for_auth) = match algorithm_id {
+        AUTH_ALGORITHM_CKB => {
+            // Single-sig: witness should be exactly 130 bytes (merchant_sig + user_sig)
+            if witness.len() != 130 {
+                return Err(Error::WitnessLenError);
+            }
+            (AUTH_ALGORITHM_CKB, merchant_lock_arg.to_vec())
+        }
+        AUTH_ALGORITHM_CKB_MULTISIG => {
+            // Multi-sig: extract and verify multisig_config from witness
+            if witness.len() < MULTISIG_HEADER_LEN + SIGNATURE_LEN {
+                return Err(Error::WitnessLenError);
+            }
+
+            // Verify multisig_config format version
+            if witness[0] != 0 {
+                return Err(Error::InvalidMultisigConfig);
+            }
+
+            // Parse multisig header to determine config length
+            let pubkey_cnt = witness[3] as usize;
+            let multisig_config_len = MULTISIG_HEADER_LEN + pubkey_cnt * MERCHANT_LOCK_ARG_LEN;
+
+            if witness.len() < multisig_config_len + SIGNATURE_LEN {
+                return Err(Error::WitnessLenError);
+            }
+
+            // Extract multisig_config from witness
+            let multisig_config = witness[0..multisig_config_len].to_vec();
+
+            // Verify blake160(multisig_config) == merchant_lock_arg
+            let multisig_hash = &blake2b_256(&multisig_config)[0..20];
+            if multisig_hash != merchant_lock_arg {
+                return Err(Error::InvalidMultisigConfig);
+            }
+
+            // Remove multisig_config from witness, leaving only signatures
+            witness.drain(0..multisig_config_len);
+
+            (AUTH_ALGORITHM_CKB_MULTISIG, multisig_config)
+        }
+        _ => return Err(Error::InvalidLockArgs),
+    };
+
     match unlock_type {
         UNLOCK_TYPE_COMMITMENT => verify_commitment_path(
             merchant_algorithm_id,
-            merchant_lock_arg,
+            &merchant_lock_arg_for_auth,
             user_pubkey_hash,
             message,
             witness,
@@ -212,7 +253,7 @@ fn verify() -> Result<(), Error> {
         )?,
         UNLOCK_TYPE_TIMEOUT => verify_timeout_path(
             merchant_algorithm_id,
-            merchant_lock_arg,
+            &merchant_lock_arg_for_auth,
             user_pubkey_hash,
             timeout_epoch,
             message,
@@ -232,8 +273,9 @@ fn verify_commitment_path(
     witness: Vec<u8>,
     tx: &Transaction,
 ) -> Result<(), Error> {
-    // For multisig, witness contains M signatures (65 * M bytes)
-    // For single-sig, witness contains 1 signature (65 bytes)
+    // Split witness into merchant part and user signature
+    // - Single-sig: merchant_sig(65) + user_sig(65)
+    // - Multi-sig: merchant_sigs(M*65) + user_sig(65)
     let merchant_sig_len = witness.len() - SIGNATURE_LEN;
     let (merchant_signature, user_signature) = witness.split_at(merchant_sig_len);
 
@@ -243,8 +285,24 @@ fn verify_commitment_path(
     // Verify user signature (always single-sig)
     verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
 
-    // Verify merchant signature (single-sig or multi-sig)
-    verify_signature_with_auth(merchant_algorithm_id, merchant_lock_arg, &message, merchant_signature)?;
+    // Verify merchant signature
+    // For multisig (algorithm_id=6), auth expects:
+    //   - lock_arg: blake160(multisig_config) - 20 bytes
+    //   - signature: multisig_config + M*65 signatures
+    if merchant_algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG {
+        // merchant_lock_arg contains the full multisig_config
+        // merchant_signature contains M*65 bytes of signatures
+        // Combine them for signature parameter: multisig_config + signatures
+        let mut multisig_witness = merchant_lock_arg.to_vec();
+        multisig_witness.extend_from_slice(merchant_signature);
+
+        // Calculate blake160 hash for lock_arg parameter
+        let multisig_hash = &blake2b_256(merchant_lock_arg)[0..20];
+        verify_signature_with_auth(merchant_algorithm_id, multisig_hash, &message, &multisig_witness)?;
+    } else {
+        // Single-sig: signature is just 65 bytes
+        verify_signature_with_auth(merchant_algorithm_id, merchant_lock_arg, &message, merchant_signature)?;
+    }
 
     Ok(())
 }
@@ -258,8 +316,9 @@ fn verify_timeout_path(
     witness: Vec<u8>,
     tx: &Transaction,
 ) -> Result<(), Error> {
-    // For multisig, witness contains M signatures (65 * M bytes)
-    // For single-sig, witness contains 1 signature (65 bytes)
+    // Split witness into merchant part and user signature
+    // - Single-sig: merchant_sig(65) + user_sig(65)
+    // - Multi-sig: merchant_sigs(M*65) + user_sig(65)
     let merchant_sig_len = witness.len() - SIGNATURE_LEN;
     let (merchant_signature, user_signature) = witness.split_at(merchant_sig_len);
 
@@ -274,8 +333,24 @@ fn verify_timeout_path(
     // Verify user signature (always single-sig)
     verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
 
-    // Verify merchant signature (single-sig or multi-sig)
-    verify_signature_with_auth(merchant_algorithm_id, merchant_lock_arg, &message, merchant_signature)?;
+    // Verify merchant signature
+    // For multisig (algorithm_id=6), auth expects:
+    //   - lock_arg: blake160(multisig_config) - 20 bytes
+    //   - signature: multisig_config + M*65 signatures
+    if merchant_algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG {
+        // merchant_lock_arg contains the full multisig_config
+        // merchant_signature contains M*65 bytes of signatures
+        // Combine them for signature parameter: multisig_config + signatures
+        let mut multisig_witness = merchant_lock_arg.to_vec();
+        multisig_witness.extend_from_slice(merchant_signature);
+
+        // Calculate blake160 hash for lock_arg parameter
+        let multisig_hash = &blake2b_256(merchant_lock_arg)[0..20];
+        verify_signature_with_auth(merchant_algorithm_id, multisig_hash, &message, &multisig_witness)?;
+    } else {
+        // Single-sig: signature is just 65 bytes
+        verify_signature_with_auth(merchant_algorithm_id, merchant_lock_arg, &message, merchant_signature)?;
+    }
 
     // Verify refund output structure
     verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, tx)?;
@@ -339,19 +414,24 @@ fn verify_commitment_output_structure(
     let merchant_output = outputs.get(1).unwrap();
 
     // Build expected merchant lock based on whether it's single-sig or multi-sig
-    let expected_merchant_lock = if merchant_pubkey_hash.len() == MERCHANT_PUBKEY_HASH_LEN {
-        // Single-sig: use SECP256K1_CODE_HASH with pubkey hash
+    // Note: merchant_pubkey_hash parameter contains:
+    //   - Single-sig: 20 bytes blake160(pubkey) from args
+    //   - Multi-sig: 4+N*20 bytes full multisig_config from witness
+    let expected_merchant_lock = if merchant_pubkey_hash.len() == MERCHANT_LOCK_ARG_LEN {
+        // Single-sig output: code_hash=SECP256K1, args=blake160(pubkey) (20 bytes)
         Script::new_builder()
             .code_hash(SECP256K1_CODE_HASH.pack())
             .hash_type(ScriptHashType::Type.into())
             .args(merchant_pubkey_hash.pack())
             .build()
     } else {
-        // Multi-sig: use SECP256K1_MULTISIG_CODE_HASH with full multisig script
+        // Multi-sig output: code_hash=SECP256K1_MULTISIG, args=blake160(multisig_config) (20 bytes)
+        // Need to hash the full multisig_config to get the 20-byte args
+        let multisig_hash = &blake2b_256(merchant_pubkey_hash)[0..20];
         Script::new_builder()
             .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
             .hash_type(ScriptHashType::Type.into())
-            .args(merchant_pubkey_hash.pack())
+            .args(multisig_hash.pack())
             .build()
     };
 
@@ -422,19 +502,24 @@ fn verify_refund_output_structure(
         let merchant_output = outputs.get(1).unwrap();
 
         // Build expected merchant lock based on whether it's single-sig or multi-sig
-        let expected_merchant_lock = if merchant_pubkey_hash.len() == MERCHANT_PUBKEY_HASH_LEN {
-            // Single-sig: use SECP256K1_CODE_HASH with pubkey hash
+        // Note: merchant_pubkey_hash parameter contains:
+        //   - Single-sig: 20 bytes blake160(pubkey) from args
+        //   - Multi-sig: 4+N*20 bytes full multisig_config from witness
+        let expected_merchant_lock = if merchant_pubkey_hash.len() == MERCHANT_LOCK_ARG_LEN {
+            // Single-sig output: code_hash=SECP256K1, args=blake160(pubkey) (20 bytes)
             Script::new_builder()
                 .code_hash(SECP256K1_CODE_HASH.pack())
                 .hash_type(ScriptHashType::Type.into())
                 .args(merchant_pubkey_hash.pack())
                 .build()
         } else {
-            // Multi-sig: use SECP256K1_MULTISIG_CODE_HASH with full multisig script
+            // Multi-sig output: code_hash=SECP256K1_MULTISIG, args=blake160(multisig_config) (20 bytes)
+            // Need to hash the full multisig_config to get the 20-byte args
+            let multisig_hash = &blake2b_256(merchant_pubkey_hash)[0..20];
             Script::new_builder()
                 .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
                 .hash_type(ScriptHashType::Type.into())
-                .args(merchant_pubkey_hash.pack())
+                .args(multisig_hash.pack())
                 .build()
         };
 
