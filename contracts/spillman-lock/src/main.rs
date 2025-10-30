@@ -27,8 +27,8 @@ use ckb_std::{
     },
     error::SysError,
     high_level::{
-        load_cell_capacity, load_input_since, load_script, load_transaction, load_witness,
-        spawn_cell,
+        load_cell, load_cell_capacity, load_cell_data, load_input_since, load_script,
+        load_transaction, load_witness, spawn_cell,
     },
     since::Since,
     syscalls::wait,
@@ -59,6 +59,8 @@ pub enum Error {
     ArgsLenError,
     AuthError,
     ExcessiveFee,
+    TypeScriptMismatch,
+    XudtAmountMismatch,
 }
 
 impl From<SysError> for Error {
@@ -293,6 +295,34 @@ fn verify_commitment_output_structure(
         return Err(Error::MerchantPubkeyHashMismatch);
     }
 
+    // Verify type script consistency for xUDT channels
+    let input = load_cell(0, Source::GroupInput)?;
+    let input_type = input.type_().to_opt();
+    let user_output_type = user_output.type_().to_opt();
+    let merchant_output_type = merchant_output.type_().to_opt();
+
+    // If input has type script, both outputs must have the same type script
+    if let Some(input_t) = input_type {
+        let input_type_hash = input_t.calc_script_hash();
+
+        // Verify user output type script
+        match user_output_type {
+            Some(user_t) if user_t.calc_script_hash() == input_type_hash => {}
+            _ => return Err(Error::TypeScriptMismatch),
+        }
+
+        // Verify merchant output type script
+        match merchant_output_type {
+            Some(merchant_t) if merchant_t.calc_script_hash() == input_type_hash => {}
+            _ => return Err(Error::TypeScriptMismatch),
+        }
+    } else {
+        // If input has no type script, outputs should not have type script either
+        if user_output_type.is_some() || merchant_output_type.is_some() {
+            return Err(Error::TypeScriptMismatch);
+        }
+    }
+
     Ok(())
 }
 
@@ -303,26 +333,52 @@ fn verify_refund_output_structure(user_pubkey_hash: &[u8], tx: &Transaction) -> 
         return Err(Error::RefundMustHaveExactlyOneOutput);
     }
 
-    let user_output = outputs.get(0).unwrap();
+    let output = outputs.get(0).unwrap();
+
+    // 1. Verify lock script (user address)
     let expected_user_lock = Script::new_builder()
         .code_hash(SECP256K1_CODE_HASH.pack())
         .hash_type(ScriptHashType::Type.into())
         .args(user_pubkey_hash.pack())
         .build();
 
-    if user_output.lock().calc_script_hash() != expected_user_lock.calc_script_hash() {
+    if output.lock().calc_script_hash() != expected_user_lock.calc_script_hash() {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
-    // Check that the transaction fee is not excessive
-    // Load input capacity
-    let input_capacity = load_cell_capacity(0, Source::GroupInput)?;
+    // 2. Load input cell to get type script
+    let input = load_cell(0, Source::GroupInput)?;
+    let input_type = input.type_().to_opt();
+    let output_type = output.type_().to_opt();
 
-    // Get output capacity
-    let output = tx.raw().outputs().get(0).unwrap();
+    // 3. Verify type script consistency
+    match (input_type, output_type) {
+        (Some(input_t), Some(output_t)) => {
+            // Both have type script, must be the same
+            if input_t.calc_script_hash() != output_t.calc_script_hash() {
+                return Err(Error::TypeScriptMismatch);
+            }
+
+            // 4. Verify xUDT amount consistency (full refund)
+            let input_data = load_cell_data(0, Source::GroupInput)?;
+            let output_data = tx.raw().outputs_data().get(0).unwrap();
+            if input_data != output_data.raw_data() {
+                return Err(Error::XudtAmountMismatch);
+            }
+        }
+        (None, None) => {
+            // Both have no type script, pure CKB channel, OK
+        }
+        _ => {
+            // One has type script, one doesn't - error
+            return Err(Error::TypeScriptMismatch);
+        }
+    }
+
+    // 5. Verify CKB capacity fee is not excessive
+    let input_capacity = load_cell_capacity(0, Source::GroupInput)?;
     let output_capacity: u64 = output.capacity().unpack();
 
-    // Calculate fee and check it doesn't exceed MAX_FEE
     let fee = input_capacity.saturating_sub(output_capacity);
     if fee > MAX_FEE {
         return Err(Error::ExcessiveFee);
