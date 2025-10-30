@@ -62,6 +62,7 @@ pub enum Error {
     TypeScriptMismatch,
     XudtAmountMismatch,
     MerchantCapacityExcessive,
+    InvalidMultisigConfig,
 }
 
 impl From<SysError> for Error {
@@ -86,13 +87,27 @@ pub fn program_entry() -> i8 {
 // a placeholder for empty witness args, to resolve the issue of xudt compatibility
 const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
 
-// Script args layout: [merchant_pubkey_hash(20)] + [user_pubkey_hash(20)] + [timeout_epoch(8)] + [version(1)]
+// Auth algorithm IDs
+const AUTH_ALGORITHM_CKB: u8 = 0;          // CKB/SECP256K1 single-sig
+const AUTH_ALGORITHM_CKB_MULTISIG: u8 = 6; // CKB multisig
+
+// Script args layout (variable length):
+// Single-sig: [merchant_pubkey_hash(20)] + [user_pubkey_hash(20)] + [timeout(8)] + [version(1)] = 49 bytes
+// Multi-sig: [multisig_script(4+20*N)] + [user_pubkey_hash(20)] + [timeout(8)] + [version(1)] = 33+20*N bytes
+//   multisig_script format: S | R | M | N | PubKeyHash1 | PubKeyHash2 | ...
+//   S = format_version (1 byte, set to 0)
+//   R = first_n (1 byte, at least R signatures must match first R pubkeys, usually 0)
+//   M = threshold (1 byte, require M signatures)
+//   N = pubkey_cnt (1 byte, total N pubkeys)
 const MERCHANT_PUBKEY_HASH_LEN: usize = 20;
 const USER_PUBKEY_HASH_LEN: usize = 20;
 const TIMEOUT_EPOCH_LEN: usize = 8;
 const VERSION_LEN: usize = 1;
-const ARGS_LEN: usize =
+const MULTISIG_HEADER_LEN: usize = 4; // S + R + M + N
+const SINGLE_SIG_ARGS_LEN: usize =
     MERCHANT_PUBKEY_HASH_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN; // 49 bytes
+const MIN_MULTISIG_ARGS_LEN: usize =
+    MULTISIG_HEADER_LEN + MERCHANT_PUBKEY_HASH_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN; // 53 bytes (1 pubkey)
 
 // Script args field offsets
 const MERCHANT_PUBKEY_HASH_OFFSET: usize = 0;
@@ -119,7 +134,8 @@ fn verify() -> Result<(), Error> {
 
     let mut witness = load_witness(0, Source::GroupInput)?;
 
-    if witness.len() != EMPTY_WITNESS_ARGS.len() + UNLOCK_TYPE_LEN + TOTAL_SIGNATURE_LEN {
+    // Check minimum witness length
+    if witness.len() < EMPTY_WITNESS_ARGS.len() + UNLOCK_TYPE_LEN + SIGNATURE_LEN {
         return Err(Error::WitnessLenError);
     }
 
@@ -142,18 +158,42 @@ fn verify() -> Result<(), Error> {
 
     let script = load_script()?;
     let args: Bytes = script.args().unpack();
-    if args.len() != ARGS_LEN {
-        return Err(Error::ArgsLenError);
-    }
 
-    let merchant_pubkey_hash = &args[MERCHANT_PUBKEY_HASH_OFFSET..USER_PUBKEY_HASH_OFFSET];
-    let user_pubkey_hash = &args[USER_PUBKEY_HASH_OFFSET..TIMEOUT_EPOCH_OFFSET];
+    // Parse merchant lock arg based on args length
+    let (merchant_algorithm_id, merchant_lock_arg, merchant_len) = if args.len() == SINGLE_SIG_ARGS_LEN {
+        // Single-sig: merchant_pubkey_hash (20 bytes)
+        (AUTH_ALGORITHM_CKB, &args[0..MERCHANT_PUBKEY_HASH_LEN], MERCHANT_PUBKEY_HASH_LEN)
+    } else if args.len() >= MIN_MULTISIG_ARGS_LEN {
+        // Multi-sig: parse multisig script
+        if args[0] != 0 {
+            // format_version must be 0
+            return Err(Error::InvalidMultisigConfig);
+        }
+
+        let pubkey_cnt = args[3] as usize;
+        let multisig_len = MULTISIG_HEADER_LEN + pubkey_cnt * MERCHANT_PUBKEY_HASH_LEN;
+
+        if args.len() != multisig_len + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + VERSION_LEN {
+            return Err(Error::InvalidMultisigConfig);
+        }
+
+        (AUTH_ALGORITHM_CKB_MULTISIG, &args[0..multisig_len], multisig_len)
+    } else {
+        return Err(Error::ArgsLenError);
+    };
+
+    // Parse remaining fields
+    let user_offset = merchant_len;
+    let timeout_offset = user_offset + USER_PUBKEY_HASH_LEN;
+    let version_offset = timeout_offset + TIMEOUT_EPOCH_LEN;
+
+    let user_pubkey_hash = &args[user_offset..timeout_offset];
     let timeout_epoch = u64::from_le_bytes(
-        args[TIMEOUT_EPOCH_OFFSET..VERSION_OFFSET]
+        args[timeout_offset..version_offset]
             .try_into()
             .unwrap(),
     );
-    let version = args[VERSION_OFFSET];
+    let version = args[version_offset];
 
     if version != 0 {
         return Err(Error::UnsupportedVersion);
@@ -163,14 +203,16 @@ fn verify() -> Result<(), Error> {
 
     match unlock_type {
         UNLOCK_TYPE_COMMITMENT => verify_commitment_path(
-            merchant_pubkey_hash,
+            merchant_algorithm_id,
+            merchant_lock_arg,
             user_pubkey_hash,
             message,
             witness,
             &tx,
         )?,
         UNLOCK_TYPE_TIMEOUT => verify_timeout_path(
-            merchant_pubkey_hash,
+            merchant_algorithm_id,
+            merchant_lock_arg,
             user_pubkey_hash,
             timeout_epoch,
             message,
@@ -183,35 +225,43 @@ fn verify() -> Result<(), Error> {
 }
 
 fn verify_commitment_path(
-    merchant_pubkey_hash: &[u8],
+    merchant_algorithm_id: u8,
+    merchant_lock_arg: &[u8],
     user_pubkey_hash: &[u8],
     message: [u8; 32],
     witness: Vec<u8>,
     tx: &Transaction,
 ) -> Result<(), Error> {
-    let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
+    // For multisig, witness contains M signatures (65 * M bytes)
+    // For single-sig, witness contains 1 signature (65 bytes)
+    let merchant_sig_len = witness.len() - SIGNATURE_LEN;
+    let (merchant_signature, user_signature) = witness.split_at(merchant_sig_len);
 
     // Verify commitment output structure
-    verify_commitment_output_structure(merchant_pubkey_hash, user_pubkey_hash, tx)?;
+    verify_commitment_output_structure(merchant_lock_arg, user_pubkey_hash, tx)?;
 
-    // Verify user signature
-    verify_signature_with_auth(user_pubkey_hash, &message, user_signature)?;
+    // Verify user signature (always single-sig)
+    verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
 
-    // Verify merchant signature
-    verify_signature_with_auth(merchant_pubkey_hash, &message, merchant_signature)?;
+    // Verify merchant signature (single-sig or multi-sig)
+    verify_signature_with_auth(merchant_algorithm_id, merchant_lock_arg, &message, merchant_signature)?;
 
     Ok(())
 }
 
 fn verify_timeout_path(
-    merchant_pubkey_hash: &[u8],
+    merchant_algorithm_id: u8,
+    merchant_lock_arg: &[u8],
     user_pubkey_hash: &[u8],
     timeout_epoch: u64,
     message: [u8; 32],
     witness: Vec<u8>,
     tx: &Transaction,
 ) -> Result<(), Error> {
-    let (merchant_signature, user_signature) = witness.split_at(SIGNATURE_LEN);
+    // For multisig, witness contains M signatures (65 * M bytes)
+    // For single-sig, witness contains 1 signature (65 bytes)
+    let merchant_sig_len = witness.len() - SIGNATURE_LEN;
+    let (merchant_signature, user_signature) = witness.split_at(merchant_sig_len);
 
     let raw_since = load_input_since(0, Source::GroupInput)?;
     let since = Since::new(raw_since);
@@ -221,33 +271,34 @@ fn verify_timeout_path(
         return Err(Error::TimeoutNotReached);
     }
 
-    // Verify user signature
-    verify_signature_with_auth(user_pubkey_hash, &message, user_signature)?;
+    // Verify user signature (always single-sig)
+    verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
 
-    // Verify merchant signature
-    verify_signature_with_auth(merchant_pubkey_hash, &message, merchant_signature)?;
+    // Verify merchant signature (single-sig or multi-sig)
+    verify_signature_with_auth(merchant_algorithm_id, merchant_lock_arg, &message, merchant_signature)?;
 
     // Verify refund output structure
-    verify_refund_output_structure(merchant_pubkey_hash, user_pubkey_hash, tx)?;
+    verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, tx)?;
 
     Ok(())
 }
 
 fn verify_signature_with_auth(
-    pubkey_hash: &[u8],
+    algorithm_id: u8,
+    lock_arg: &[u8],
     message: &[u8; 32],
     signature: &[u8],
 ) -> Result<(), Error> {
-    let algorithm_id_str = CString::new(encode([0u8])).unwrap(); // 0x00 = CKB/SECP256K1
+    let algorithm_id_str = CString::new(encode([algorithm_id])).unwrap();
     let signature_str = CString::new(encode(signature)).unwrap();
     let message_str = CString::new(encode(message)).unwrap();
-    let pubkey_hash_str = CString::new(encode(pubkey_hash)).unwrap();
+    let lock_arg_str = CString::new(encode(lock_arg)).unwrap();
 
     let args = [
         algorithm_id_str.as_c_str(),
         signature_str.as_c_str(),
         message_str.as_c_str(),
-        pubkey_hash_str.as_c_str(),
+        lock_arg_str.as_c_str(),
     ];
 
     // Spawn auth contract to verify signature
@@ -286,11 +337,23 @@ fn verify_commitment_output_structure(
     }
 
     let merchant_output = outputs.get(1).unwrap();
-    let expected_merchant_lock = Script::new_builder()
-        .code_hash(SECP256K1_CODE_HASH.pack())
-        .hash_type(ScriptHashType::Type.into())
-        .args(merchant_pubkey_hash.pack())
-        .build();
+
+    // Build expected merchant lock based on whether it's single-sig or multi-sig
+    let expected_merchant_lock = if merchant_pubkey_hash.len() == MERCHANT_PUBKEY_HASH_LEN {
+        // Single-sig: use SECP256K1_CODE_HASH with pubkey hash
+        Script::new_builder()
+            .code_hash(SECP256K1_CODE_HASH.pack())
+            .hash_type(ScriptHashType::Type.into())
+            .args(merchant_pubkey_hash.pack())
+            .build()
+    } else {
+        // Multi-sig: use SECP256K1_MULTISIG_CODE_HASH with full multisig script
+        Script::new_builder()
+            .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
+            .hash_type(ScriptHashType::Type.into())
+            .args(merchant_pubkey_hash.pack())
+            .build()
+    };
 
     if merchant_output.lock().calc_script_hash() != expected_merchant_lock.calc_script_hash() {
         return Err(Error::MerchantPubkeyHashMismatch);
@@ -357,11 +420,23 @@ fn verify_refund_output_structure(
     // 2. If there's Output 1, verify it's merchant address and capacity is exact
     if outputs.len() == 2 {
         let merchant_output = outputs.get(1).unwrap();
-        let expected_merchant_lock = Script::new_builder()
-            .code_hash(SECP256K1_CODE_HASH.pack())
-            .hash_type(ScriptHashType::Type.into())
-            .args(merchant_pubkey_hash.pack())
-            .build();
+
+        // Build expected merchant lock based on whether it's single-sig or multi-sig
+        let expected_merchant_lock = if merchant_pubkey_hash.len() == MERCHANT_PUBKEY_HASH_LEN {
+            // Single-sig: use SECP256K1_CODE_HASH with pubkey hash
+            Script::new_builder()
+                .code_hash(SECP256K1_CODE_HASH.pack())
+                .hash_type(ScriptHashType::Type.into())
+                .args(merchant_pubkey_hash.pack())
+                .build()
+        } else {
+            // Multi-sig: use SECP256K1_MULTISIG_CODE_HASH with full multisig script
+            Script::new_builder()
+                .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
+                .hash_type(ScriptHashType::Type.into())
+                .args(merchant_pubkey_hash.pack())
+                .build()
+        };
 
         if merchant_output.lock().calc_script_hash() != expected_merchant_lock.calc_script_hash() {
             return Err(Error::MerchantPubkeyHashMismatch);
