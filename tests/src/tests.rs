@@ -948,7 +948,6 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_1 = build_and_sign_tx(
-        &mut context,
         &tx,
         &input,
         wrong_outputs_1,
@@ -982,7 +981,6 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_2 = build_and_sign_tx(
-        &mut context,
         &tx,
         &input,
         wrong_outputs_2,
@@ -1020,7 +1018,6 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_3 = build_and_sign_tx(
-        &mut context,
         &tx,
         &input,
         wrong_outputs_3,
@@ -1054,7 +1051,6 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     ];
 
     let wrong_tx_4 = build_and_sign_tx(
-        &mut context,
         &tx,
         &input,
         wrong_outputs_4,
@@ -1070,8 +1066,8 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
 }
 
 // Helper function to build and sign transaction
+// Note: base_tx should already be completed (with cell_deps properly set)
 fn build_and_sign_tx(
-    context: &mut Context,
     base_tx: &TransactionView,
     input: &CellInput,
     outputs: Vec<CellOutput>,
@@ -1085,7 +1081,6 @@ fn build_and_sign_tx(
         .outputs(outputs)
         .outputs_data(outputs_data.pack())
         .build();
-    let tx_base = context.complete_tx(tx_base);
 
     let message = compute_signing_message(&tx_base);
     let user_sig = user_key
