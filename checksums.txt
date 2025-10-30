@@ -1,0 +1,2 @@
+54f15fd273fb2c0362bcacf38f7cdc717e3538d346a1b20d57b6584778e53b74  build/release/spillman-lock
+f7c65a8df9bfad3a5ca85e390e1938e9449e9e1cfd4652bffbb2e923688edd96  build/release/spillman-lock.debug
