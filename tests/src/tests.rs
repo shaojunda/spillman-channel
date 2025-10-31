@@ -1064,7 +1064,8 @@ fn test_spillman_lock_commitment_path_with_multisig_merchant() {
     let insufficient_witness = [
         &EMPTY_WITNESS_ARGS[..],
         &[UNLOCK_TYPE_COMMITMENT][..],
-        &merchant_signature1[..], // Only 1 signature!
+        &multisig_config[..],      // Must include multisig_config
+        &merchant_signature1[..],   // Only 1 signature (need 2)!
         &user_signature[..],
     ]
     .concat();
@@ -1078,6 +1079,300 @@ fn test_spillman_lock_commitment_path_with_multisig_merchant() {
         .verify_tx(&fail_tx, 10_000_000)
         .expect_err("insufficient signatures should fail");
     println!("error (insufficient signatures): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_timeout_path_with_multisig_merchant() {
+    let mut context = Context::default();
+
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    // Generate 3 merchant keys for 2-of-3 multisig
+    let merchant_key1 = Generator::random_keypair();
+    let merchant_key2 = Generator::random_keypair();
+    let merchant_key3 = Generator::random_keypair();
+    let user_key = Generator::random_keypair();
+
+    let merchant_pubkey_hash1 = blake160(&merchant_key1.1.serialize());
+    let merchant_pubkey_hash2 = blake160(&merchant_key2.1.serialize());
+    let merchant_pubkey_hash3 = blake160(&merchant_key3.1.serialize());
+
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let algorithm_id: u8 = 6; // Multi-sig
+    let version: u8 = 0;
+
+    // Multisig config: S=0, R=0, M=2, N=3
+    let multisig_config = [
+        &[0u8][..],                          // S: format version
+        &[0u8][..],                          // R: first_n (0 means any 2 of 3)
+        &[2u8][..],                          // M: threshold (need 2 signatures)
+        &[3u8][..],                          // N: total pubkeys (3 pubkeys)
+        merchant_pubkey_hash1.as_ref(),      // PubKeyHash1
+        merchant_pubkey_hash2.as_ref(),      // PubKeyHash2
+        merchant_pubkey_hash3.as_ref(),      // PubKeyHash3
+    ]
+    .concat();
+
+    // Calculate blake160(multisig_config) for args
+    let merchant_lock_arg = &blake2b_256(&multisig_config)[0..20];
+
+    // Build args: merchant_lock_arg(20) + user(20) + timeout(8) + algorithm_id(1) + version(1) = 50 bytes
+    let args = [
+        merchant_lock_arg,
+        user_pubkey_hash.as_ref(),
+        &timeout_epoch.as_u64().to_le_bytes(),
+        &[algorithm_id],
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    // User lock script (single-sig)
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    // Merchant lock script (multisig with blake160(multisig_config))
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_lock_arg.to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack()) // 1001 CKB
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(timeout_epoch.as_u64().pack())
+        .build();
+
+    // Refund: all funds go back to user
+    let outputs = vec![CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack()) // 1000 CKB (1 CKB fee)
+        .lock(user_lock_script.clone())
+        .build()];
+
+    let outputs_data = vec![Bytes::new(); 1];
+
+    // Build and sign with multisig (use merchant_key1 and merchant_key2)
+    let success_tx = build_and_sign_tx_multisig(
+        cell_deps.clone(),
+        input.clone(),
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &[&merchant_key1, &merchant_key2], // Use 2 of 3 keys
+        &multisig_config,                   // Pass multisig config
+    );
+
+    let cycles = context
+        .verify_tx(&success_tx, 10_000_000)
+        .expect("pass verification");
+    println!("consume cycles (multisig timeout): {}", cycles);
+
+    // Test: timeout not reached should fail
+    let input_without_since = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(0u64.pack()) // No timeout set
+        .build();
+
+    let fail_tx = TransactionBuilder::default()
+        .cell_deps(cell_deps.clone())
+        .input(input_without_since)
+        .outputs(success_tx.outputs())
+        .outputs_data(success_tx.outputs_data())
+        .witness(success_tx.witnesses().get(0).unwrap())
+        .build();
+
+    let err = context
+        .verify_tx(&fail_tx, 10_000_000)
+        .expect_err("timeout not reached should fail");
+    println!("error (timeout not reached): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_multisig_error_scenarios() {
+    let mut context = Context::default();
+
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    // Generate 3 merchant keys for 2-of-3 multisig
+    let merchant_key1 = Generator::random_keypair();
+    let merchant_key2 = Generator::random_keypair();
+    let merchant_key3 = Generator::random_keypair();
+    let user_key = Generator::random_keypair();
+
+    let merchant_pubkey_hash1 = blake160(&merchant_key1.1.serialize());
+    let merchant_pubkey_hash2 = blake160(&merchant_key2.1.serialize());
+    let merchant_pubkey_hash3 = blake160(&merchant_key3.1.serialize());
+
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let algorithm_id: u8 = 6; // Multi-sig
+    let version: u8 = 0;
+
+    // Multisig config: S=0, R=0, M=2, N=3
+    let multisig_config = [
+        &[0u8][..],                          // S: format version
+        &[0u8][..],                          // R: first_n (0 means any 2 of 3)
+        &[2u8][..],                          // M: threshold (need 2 signatures)
+        &[3u8][..],                          // N: total pubkeys (3 pubkeys)
+        merchant_pubkey_hash1.as_ref(),      // PubKeyHash1
+        merchant_pubkey_hash2.as_ref(),      // PubKeyHash2
+        merchant_pubkey_hash3.as_ref(),      // PubKeyHash3
+    ]
+    .concat();
+
+    // Calculate blake160(multisig_config) for args
+    let merchant_lock_arg = &blake2b_256(&multisig_config)[0..20];
+
+    // Build args
+    let args = [
+        merchant_lock_arg,
+        user_pubkey_hash.as_ref(),
+        &timeout_epoch.as_u64().to_le_bytes(),
+        &[algorithm_id],
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    // User lock script (single-sig)
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    // Merchant lock script (multisig with blake160(multisig_config))
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_lock_arg.to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .build();
+
+    // Test 1: Wrong merchant output - using single-sig code_hash instead of multisig
+    let wrong_merchant_lock = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack()) // Wrong! Should be SECP256K1_MULTISIG_CODE_HASH
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_lock_arg.to_vec()).pack())
+        .build();
+
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(wrong_merchant_lock) // Wrong lock!
+            .build(),
+    ];
+
+    let outputs_data = vec![Bytes::new(); 2];
+
+    let fail_tx = build_and_sign_tx_multisig(
+        cell_deps.clone(),
+        input.clone(),
+        outputs.clone(),
+        outputs_data.clone(),
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &[&merchant_key1, &merchant_key2],
+        &multisig_config,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx, 10_000_000)
+        .expect_err("wrong merchant output code_hash should fail");
+    println!("error (wrong code_hash): {:?}", err);
+
+    // Test 2: Mismatched multisig_config hash
+    // Create a different multisig config but use it with the original lock_arg
+    let wrong_multisig_config = [
+        &[0u8][..],
+        &[0u8][..],
+        &[1u8][..], // M=1 instead of 2
+        &[2u8][..], // N=2 instead of 3
+        merchant_pubkey_hash1.as_ref(),
+        merchant_pubkey_hash2.as_ref(),
+    ]
+    .concat();
+
+    let correct_outputs = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script.clone())
+            .build(),
+    ];
+
+    let fail_tx2 = build_and_sign_tx_multisig(
+        cell_deps.clone(),
+        input.clone(),
+        correct_outputs,
+        outputs_data,
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &[&merchant_key1], // Only 1 signature for the wrong config
+        &wrong_multisig_config, // Wrong config! Hash doesn't match args
+    );
+
+    let err2 = context
+        .verify_tx(&fail_tx2, 10_000_000)
+        .expect_err("mismatched multisig_config hash should fail");
+    println!("error (mismatched config): {:?}", err2);
 }
 
 // Helper function to build and sign transaction with multisig merchant
