@@ -1142,13 +1142,6 @@ fn test_spillman_lock_timeout_path_with_multisig_merchant() {
         .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
         .build();
 
-    // Merchant lock script (multisig with blake160(multisig_config))
-    let merchant_lock_script = Script::new_builder()
-        .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
-        .hash_type(ScriptHashType::Type.into())
-        .args(Bytes::from(merchant_lock_arg.to_vec()).pack())
-        .build();
-
     let spillman_lock_dep = CellDep::new_builder()
         .out_point(spillman_lock_out_point)
         .build();
