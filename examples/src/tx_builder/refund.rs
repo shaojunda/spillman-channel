@@ -158,8 +158,10 @@ pub fn build_refund_transaction(
                 .output_data(Bytes::new().pack());
         }
 
-        // Add witness placeholder
-        builder = builder.witness(Bytes::new().pack());
+        // Add witness placeholder with correct size
+        // Spillman Lock timeout witness: EMPTY_WITNESS_ARGS(16) + UNLOCK_TYPE(1) + merchant_sig(65) + user_sig(65) = 147 bytes
+        let dummy_witness = vec![0u8; 147];
+        builder = builder.witness(Bytes::from(dummy_witness).pack());
 
         builder.build()
     };
@@ -170,53 +172,71 @@ pub fn build_refund_transaction(
         fee_calculator.fee(tx_size)
     };
 
-    // Step 1: Build temporary transaction to estimate fee
-    // Use a temporary user capacity (will be recalculated)
-    let temp_user_capacity = if merchant_lock_script.is_some() {
-        spillman_capacity - merchant_capacity - 1000
-    } else {
-        spillman_capacity - 1000
-    };
+    // Iteratively calculate fee until stable
+    let max_iterations = 10;
+    let mut current_fee = 0u64;
+    let mut final_user_capacity = 0u64;
+    let mut final_tx: Option<TransactionView> = None;
 
-    let temp_tx = build_tx(temp_user_capacity);
-    let estimated_fee = calculate_tx_fee(&temp_tx);
+    for iteration in 0..max_iterations {
+        // Calculate user capacity based on current fee
+        let user_cap = if merchant_lock_script.is_some() {
+            // Co-fund mode
+            spillman_capacity
+                .checked_sub(merchant_capacity)
+                .and_then(|c| c.checked_sub(current_fee))
+                .ok_or_else(|| anyhow!("Not enough capacity for refund outputs and fee"))?
+        } else {
+            // Single fund mode
+            spillman_capacity
+                .checked_sub(current_fee)
+                .ok_or_else(|| anyhow!("Not enough capacity for refund and fee"))?
+        };
 
-    println!("  - 估算手续费: {} shannon ({} CKB)", estimated_fee, estimated_fee as f64 / 100_000_000.0);
+        // Build transaction with calculated capacity
+        let temp_tx = build_tx(user_cap);
 
-    // Step 2: Calculate actual user capacity
-    let user_capacity = if merchant_lock_script.is_some() {
-        // Co-fund mode
+        // Calculate actual fee for this transaction
+        let actual_fee = calculate_tx_fee(&temp_tx);
+
+        if iteration == 0 {
+            println!("  - 初始手续费估算: {} shannon ({} CKB)", actual_fee, actual_fee as f64 / 100_000_000.0);
+        }
+
+        // Check if fee has stabilized
+        if actual_fee == current_fee {
+            println!("  - 手续费已稳定: {} shannon ({} CKB) (迭代 {} 次)", actual_fee, actual_fee as f64 / 100_000_000.0, iteration + 1);
+            final_user_capacity = user_cap;
+            final_tx = Some(temp_tx);
+            break;
+        }
+
+        // Update for next iteration
+        current_fee = actual_fee;
+        final_user_capacity = user_cap;
+
+        if iteration == max_iterations - 1 {
+            println!("  - ⚠️  达到最大迭代次数，使用最后计算的手续费: {} shannon", current_fee);
+            final_tx = Some(temp_tx);
+        }
+    }
+
+    let tx = final_tx.ok_or_else(|| anyhow!("Failed to build transaction"))?;
+
+    // Print refund mode and amounts
+    if merchant_lock_script.is_some() {
         println!("    - Mode: Co-fund (2 outputs)");
-
-        let user_cap = spillman_capacity
-            .checked_sub(merchant_capacity)
-            .and_then(|c| c.checked_sub(estimated_fee))
-            .ok_or_else(|| anyhow!("Not enough capacity for refund outputs"))?;
-
-        println!("      - User refund: {} CKB", user_cap as f64 / 100_000_000.0);
+        println!("      - User refund: {} CKB", final_user_capacity as f64 / 100_000_000.0);
         println!("      - Merchant refund: {} CKB", merchant_capacity as f64 / 100_000_000.0);
-
-        user_cap
     } else {
-        // Single fund mode
         println!("    - Mode: Single fund (1 output)");
+        println!("      - User refund: {} CKB", final_user_capacity as f64 / 100_000_000.0);
+    }
 
-        let user_cap = spillman_capacity
-            .checked_sub(estimated_fee)
-            .ok_or_else(|| anyhow!("Not enough capacity for refund"))?;
-
-        println!("      - User refund: {} CKB", user_cap as f64 / 100_000_000.0);
-
-        user_cap
-    };
-
-    // Step 3: Build final transaction with accurate capacity
-    let tx = build_tx(user_capacity);
-
-    println!("  ✓ Refund 交易构建完成（未签名）");
+    println!("\n  ✓ Refund 交易构建完成（未签名）");
     println!("    - Inputs: {}", tx.inputs().len());
     println!("    - Outputs: {}", tx.outputs().len());
-    println!("    - Estimated fee: {} shannon", estimated_fee);
+    println!("    - Final fee: {} shannon", current_fee);
 
     // Sign transaction (both merchant and user)
     println!("\n  🔐 签名交易...");
