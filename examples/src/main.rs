@@ -95,13 +95,9 @@ enum Commands {
 
     /// 用户退款（超时后）
     Refund {
-        /// Refund transaction 文件路径
+        /// Funding transaction 文件路径
         #[arg(long)]
         tx_file: String,
-
-        /// 用户私钥文件路径
-        #[arg(long)]
-        privkey_path: String,
 
         /// 配置文件路径
         #[arg(long, default_value = "config.toml")]
@@ -156,10 +152,9 @@ async fn main() -> Result<()> {
         }
         Commands::Refund {
             tx_file,
-            privkey_path,
             config,
         } => {
-            commands::refund::execute(&tx_file, &privkey_path, &config).await?;
+            commands::refund::execute(&tx_file, &config).await?;
         }
     }
 
