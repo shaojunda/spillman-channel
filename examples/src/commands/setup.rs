@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::str::FromStr;
 
-use crate::tx_builder::funding::build_funding_transaction;
+use crate::tx_builder::funding::{build_cofund_funding_transaction, build_funding_transaction};
 use crate::tx_builder::spillman_lock::build_spillman_lock_script;
 use crate::utils::config::load_config;
 use crate::utils::crypto::parse_privkey;
@@ -29,6 +29,7 @@ pub async fn execute(
     merchant_address: Option<&str>,
     capacity: Option<u64>,
     timeout_epochs: Option<u64>,
+    co_fund: bool,
 ) -> Result<()> {
     println!("🚀 执行 set-up 命令 - 准备 Spillman Channel");
     println!("==========================================\n");
@@ -53,13 +54,13 @@ pub async fn execute(
 
     println!("✓ 用户地址: {}", user_address);
     println!("✓ 用户公钥: {}", hex::encode(user_pubkey.serialize()));
-
-    if let Some(merchant) = merchant_address {
-        println!("✓ 商户地址: {} (共同出资模式)", merchant);
-    } else {
-        println!("✓ 模式: 用户单独出资");
-    }
     println!("✓ 商户公钥: {}", hex::encode(merchant_pubkey.serialize()));
+
+    if co_fund {
+        println!("✓ 模式: Co-fund (User + Merchant 共同出资)");
+    } else {
+        println!("✓ 模式: User 单独出资");
+    }
 
     // 3. Connect to CKB network
     println!("\n🔗 连接到 CKB 网络...");
@@ -100,14 +101,33 @@ pub async fn execute(
 
     let user_addr_parsed = Address::from_str(user_address)
         .map_err(|e| anyhow!("invalid user address: {}", e))?;
-    let (funding_tx_hash, funding_output_index) = build_funding_transaction(
-        &config,
-        &user_addr_parsed,
-        &spillman_lock_script,
-        capacity,
-        funding_info_path,
-    )
-    .await?;
+
+    let (funding_tx_hash, funding_output_index) = if co_fund {
+        // Co-fund mode: User + Merchant共同出资
+        let merchant_addr = merchant_address.unwrap_or(&config.merchant.address);
+        let merchant_addr_parsed = Address::from_str(merchant_addr)
+            .map_err(|e| anyhow!("invalid merchant address: {}", e))?;
+
+        build_cofund_funding_transaction(
+            &config,
+            &user_addr_parsed,
+            &merchant_addr_parsed,
+            capacity,
+            &spillman_lock_script,
+            funding_info_path,
+        )
+        .await?
+    } else {
+        // User-only funding mode
+        build_funding_transaction(
+            &config,
+            &user_addr_parsed,
+            &spillman_lock_script,
+            capacity,
+            funding_info_path,
+        )
+        .await?
+    };
 
     // 6. Save channel info with actual funding tx info
     println!("\n💾 保存通道信息...");

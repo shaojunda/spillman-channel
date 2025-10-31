@@ -38,6 +38,10 @@ enum Commands {
         /// 超时 epoch（可选，覆盖配置文件）
         #[arg(long)]
         timeout_epochs: Option<u64>,
+
+        /// 是否使用 co-fund 模式（User + Merchant 共同出资）
+        #[arg(long, default_value = "false")]
+        co_fund: bool,
     },
 
     /// 签名交易
@@ -116,6 +120,7 @@ async fn main() -> Result<()> {
             merchant_address,
             capacity,
             timeout_epochs,
+            co_fund,
         } => {
             commands::setup::execute(
                 &config,
@@ -123,6 +128,7 @@ async fn main() -> Result<()> {
                 merchant_address.as_deref(),
                 capacity,
                 timeout_epochs,
+                co_fund,
             )
             .await?;
         }
