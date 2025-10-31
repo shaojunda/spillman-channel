@@ -1,7 +1,5 @@
-use anyhow::{anyhow, Result};
-use ckb_types::{
-    packed::{self, Script},
-};
+use anyhow::Result;
+use ckb_types::packed::Script;
 
 use crate::utils::config::Config;
 

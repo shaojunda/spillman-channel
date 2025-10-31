@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod commands;
 mod signer;
+mod storage;
 mod tx_builder;
 mod utils;
 
@@ -18,25 +19,25 @@ struct Cli {
 enum Commands {
     /// 准备通道 - 创建 funding 和 refund 交易
     SetUp {
-        /// 用户地址
-        #[arg(long)]
-        user_address: String,
-
-        /// 商户地址（可选，如果提供则使用共同出资模式）
-        #[arg(long)]
-        merchant_address: Option<String>,
-
-        /// 通道容量（CKB，默认 1000）
-        #[arg(long, default_value = "1000")]
-        capacity: u64,
-
-        /// 超时 epoch（默认 144，约24天）
-        #[arg(long, default_value = "144")]
-        timeout_epochs: u64,
-
         /// 配置文件路径
         #[arg(long, default_value = "config.toml")]
         config: String,
+
+        /// 输出目录（默认为当前目录）
+        #[arg(long, default_value = ".")]
+        output_dir: String,
+
+        /// 商户地址（可选，覆盖配置文件中的商户地址）
+        #[arg(long)]
+        merchant_address: Option<String>,
+
+        /// 通道容量（CKB，可选，覆盖配置文件）
+        #[arg(long)]
+        capacity: Option<u64>,
+
+        /// 超时 epoch（可选，覆盖配置文件）
+        #[arg(long)]
+        timeout_epochs: Option<u64>,
     },
 
     /// 签名交易
@@ -110,18 +111,18 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::SetUp {
-            user_address,
+            config,
+            output_dir,
             merchant_address,
             capacity,
             timeout_epochs,
-            config,
         } => {
             commands::setup::execute(
-                &user_address,
+                &config,
+                &output_dir,
                 merchant_address.as_deref(),
                 capacity,
                 timeout_epochs,
-                &config,
             )
             .await?;
         }

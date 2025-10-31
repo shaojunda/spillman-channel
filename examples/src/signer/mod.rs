@@ -1,3 +1,4 @@
 pub mod spillman_signer;
 
-pub use spillman_signer::SpillmanSigner;
+// Re-export when needed
+// pub use spillman_signer::SpillmanSigner;
