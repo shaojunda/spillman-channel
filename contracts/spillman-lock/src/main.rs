@@ -400,7 +400,10 @@ fn verify_commitment_output_structure(
         .args(user_pubkey_hash.pack())
         .build();
 
-    if user_output.lock().calc_script_hash() != expected_user_lock.calc_script_hash() {
+    if user_output.lock().code_hash() != expected_user_lock.code_hash()
+    || user_output.lock().hash_type() != expected_user_lock.hash_type()
+    || user_output.lock().args() != expected_user_lock.args()
+    {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
@@ -428,7 +431,10 @@ fn verify_commitment_output_structure(
             .build()
     };
 
-    if merchant_output.lock().calc_script_hash() != expected_merchant_lock.calc_script_hash() {
+    if merchant_output.lock().code_hash() != expected_merchant_lock.code_hash()
+    || merchant_output.lock().hash_type() != expected_merchant_lock.hash_type()
+    || merchant_output.lock().args() != expected_merchant_lock.args()
+    {
         return Err(Error::MerchantPubkeyHashMismatch);
     }
 
@@ -486,7 +492,10 @@ fn verify_refund_output_structure(
         .args(user_pubkey_hash.pack())
         .build();
 
-    if user_output.lock().calc_script_hash() != expected_user_lock.calc_script_hash() {
+    if user_output.lock().code_hash() != expected_user_lock.code_hash()
+    || user_output.lock().hash_type() != expected_user_lock.hash_type()
+    || user_output.lock().args() != expected_user_lock.args()
+    {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
@@ -516,7 +525,10 @@ fn verify_refund_output_structure(
                 .build()
         };
 
-        if merchant_output.lock().calc_script_hash() != expected_merchant_lock.calc_script_hash() {
+        if merchant_output.lock().code_hash() != expected_merchant_lock.code_hash()
+        || merchant_output.lock().hash_type() != expected_merchant_lock.hash_type()
+        || merchant_output.lock().args() != expected_merchant_lock.args()
+        {
             return Err(Error::MerchantPubkeyHashMismatch);
         }
 
