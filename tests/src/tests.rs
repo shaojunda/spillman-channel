@@ -287,6 +287,27 @@ fn test_spillman_lock_timeout_path() {
         .expect_err("timeout not reached should fail verification");
     println!("error (timeout not reached): {:?}", err);
 
+    // Test: incomparable since types should fail (block-based since vs epoch-based timeout)
+    // This tests the security fix: since >= timeout properly rejects incomparable types
+    let block_based_since = Since::from_block_number(1000, false).unwrap(); // Block-based since
+    let incomparable_input = success_tx
+        .inputs()
+        .get(0)
+        .unwrap()
+        .as_builder()
+        .since(block_based_since.as_u64().pack())
+        .build();
+
+    let incomparable_tx = success_tx
+        .as_advanced_builder()
+        .set_inputs(vec![incomparable_input])
+        .build();
+
+    let err = context
+        .verify_tx(&incomparable_tx, 10_000_000)
+        .expect_err("incomparable since types should fail verification");
+    println!("error (incomparable since types): {:?}", err);
+
     // Test: invalid unlock type should fail
     let invalid_unlock_type = 0x02; // not COMMITMENT(0x00) or TIMEOUT(0x01)
     let merchant_signature = merchant_key
