@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Pubkey;
+use ckb_sdk::Since;
 use ckb_types::{bytes::Bytes, core::ScriptHashType, packed, prelude::*, H256};
 use std::str::FromStr;
 
@@ -16,7 +17,10 @@ pub fn build_spillman_lock_script(
     let user_pubkey_hash = pubkey_hash(user_pubkey);
     let merchant_pubkey_hash = pubkey_hash(merchant_pubkey);
 
-    let args = SpillmanLockArgs::new(merchant_pubkey_hash, user_pubkey_hash, timeout_epoch);
+    // Encode timeout_epoch as absolute epoch-based Since value
+    let timeout_since = Since::new_absolute_epoch(timeout_epoch);
+
+    let args = SpillmanLockArgs::new(merchant_pubkey_hash, user_pubkey_hash, timeout_since.value());
     let args_bytes = args.to_bytes();
 
     let code_hash_str = config.spillman_lock.code_hash.trim_start_matches("0x");

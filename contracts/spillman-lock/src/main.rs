@@ -163,7 +163,8 @@ fn verify() -> Result<(), Error> {
     let tx = load_transaction()?;
 
     let message = {
-        let raw_tx = tx.raw().as_builder().cell_deps(Default::default()).build();
+        use ckb_std::ckb_types::packed::CellDepVec;
+        let raw_tx = tx.raw().as_builder().cell_deps(CellDepVec::default()).build();
         blake2b_256(raw_tx.as_slice())
     };
 
@@ -310,20 +311,21 @@ fn verify_timeout_path(
     let since = Since::new(raw_since);
     let timeout = Since::new(timeout_epoch);
 
-    if since < timeout {
-        return Err(Error::TimeoutNotReached);
+    // Security: Only proceed with verification if since >= timeout
+    if since >= timeout {
+        // Verify user signature (always single-sig)
+        verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
+
+        // Verify merchant signature
+        verify_merchant_signature(merchant_algorithm_id, merchant_lock_arg, merchant_signature, &message)?;
+
+        // Verify refund output structure
+        verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, tx)?;
+
+        Ok(())
+    } else {
+        Err(Error::TimeoutNotReached)
     }
-
-    // Verify user signature (always single-sig)
-    verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
-
-    // Verify merchant signature
-    verify_merchant_signature(merchant_algorithm_id, merchant_lock_arg, merchant_signature, &message)?;
-
-    // Verify refund output structure
-    verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, tx)?;
-
-    Ok(())
 }
 
 fn verify_merchant_signature(
@@ -396,7 +398,7 @@ fn verify_commitment_output_structure(
     let user_output = outputs.get(0).unwrap();
     let expected_user_lock = Script::new_builder()
         .code_hash(SECP256K1_CODE_HASH.pack())
-        .hash_type(ScriptHashType::Type.into())
+        .hash_type(ScriptHashType::Type)
         .args(user_pubkey_hash.pack())
         .build();
 
@@ -417,7 +419,7 @@ fn verify_commitment_output_structure(
         // Single-sig output: code_hash=SECP256K1, args=blake160(pubkey) (20 bytes)
         Script::new_builder()
             .code_hash(SECP256K1_CODE_HASH.pack())
-            .hash_type(ScriptHashType::Type.into())
+            .hash_type(ScriptHashType::Type)
             .args(merchant_lock_data.pack())
             .build()
     } else {
@@ -426,7 +428,7 @@ fn verify_commitment_output_structure(
         let multisig_hash = &blake2b_256(merchant_lock_data)[0..20];
         Script::new_builder()
             .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
-            .hash_type(ScriptHashType::Type.into())
+            .hash_type(ScriptHashType::Type)
             .args(multisig_hash.pack())
             .build()
     };
@@ -488,7 +490,7 @@ fn verify_refund_output_structure(
     let user_output = outputs.get(0).unwrap();
     let expected_user_lock = Script::new_builder()
         .code_hash(SECP256K1_CODE_HASH.pack())
-        .hash_type(ScriptHashType::Type.into())
+        .hash_type(ScriptHashType::Type)
         .args(user_pubkey_hash.pack())
         .build();
 
@@ -511,7 +513,7 @@ fn verify_refund_output_structure(
             // Single-sig output: code_hash=SECP256K1, args=blake160(pubkey) (20 bytes)
             Script::new_builder()
                 .code_hash(SECP256K1_CODE_HASH.pack())
-                .hash_type(ScriptHashType::Type.into())
+                .hash_type(ScriptHashType::Type)
                 .args(merchant_lock_data.pack())
                 .build()
         } else {
@@ -520,7 +522,7 @@ fn verify_refund_output_structure(
             let multisig_hash = &blake2b_256(merchant_lock_data)[0..20];
             Script::new_builder()
                 .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
-                .hash_type(ScriptHashType::Type.into())
+                .hash_type(ScriptHashType::Type)
                 .args(multisig_hash.pack())
                 .build()
         };
