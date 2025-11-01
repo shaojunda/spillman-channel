@@ -3,19 +3,16 @@ name = "spillman-channel-examples"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "full_flow"
-path = "src/full_flow.rs"
 
 [[bin]]
 name = "spillman-cli"
 path = "src/main.rs"
 
 [dependencies]
-ckb-sdk = "4.4.0"
-ckb-types = "0.202.0"
-ckb-jsonrpc-types = "0.202.0"
-ckb-crypto = { version = "0.202.0", features = ["secp"] }
+ckb-sdk = "5.0.0"
+ckb-types = "1.0.0"
+ckb-jsonrpc-types = "1.0.0"
+ckb-crypto = { version = "1.0.0", features = ["secp"] }
 ckb-hash = "1.0.0"
 secp256k1 = { version = "0.30", features = ["recovery"] }
 anyhow = "1.0"

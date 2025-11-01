@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
 use ckb_sdk::transaction::builder::FeeCalculator;
 use ckb_types::{
@@ -8,6 +9,7 @@ use ckb_types::{
     prelude::*,
     H256,
 };
+use std::str::FromStr;
 
 use crate::utils::config::Config;
 
@@ -35,7 +37,7 @@ pub fn build_refund_transaction(
     funding_tx: &TransactionView,
     user_lock_script: Script,
     merchant_lock_script: Option<Script>,
-    timeout_epoch: u64,
+    _timeout_epoch: u64,  // Not used - we read from Spillman Lock args
     output_path: &str,
 ) -> Result<TransactionView> {
     println!("  📋 构建 Refund 交易...");
@@ -48,21 +50,40 @@ pub fn build_refund_transaction(
 
     let spillman_capacity: u64 = Unpack::<u64>::unpack(&spillman_cell.capacity());
 
+    // Parse timeout_since from Spillman Lock args
+    // Args structure (50 bytes): merchant_lock_arg(20) + user_pubkey_hash(20) + timeout_since(8) + algorithm_id(1) + version(1)
+    // Note: timeout_since is already a Since-encoded value (absolute epoch-based)
+    let lock_script = spillman_cell.lock();
+    let args_bytes: Bytes = lock_script.args().unpack();
+    if args_bytes.len() != 50 {
+        return Err(anyhow!("Invalid Spillman Lock args length: expected 50, got {}", args_bytes.len()));
+    }
+
+    // Extract timeout_since from args (bytes 40-48)
+    // This is already a Since-encoded value, use it directly for input.since
+    let timeout_since = u64::from_le_bytes(
+        args_bytes[40..48]
+            .try_into()
+            .map_err(|_| anyhow!("Failed to parse timeout_since from args"))?
+    );
+
     println!("    - Spillman Lock cell capacity: {} CKB", spillman_capacity as f64 / 100_000_000.0);
     println!("    - Funding tx hash: {:#x}", funding_tx_hash);
+    println!("    - Timeout since (from Spillman Lock args): 0x{:x}", timeout_since);
 
     // Build input from Spillman Lock cell
+    // Use the timeout_since value directly (already Since-encoded)
     let input = CellInput::new_builder()
         .previous_output(
             OutPoint::new_builder()
                 .tx_hash(funding_tx_hash.pack())
-                .index(0u32.pack())
+                .index(0u32)
                 .build(),
         )
-        .since(timeout_epoch.pack()) // Time lock
+        .since(timeout_since) // Already encoded as absolute epoch-based time lock
         .build();
 
-    println!("    - Input since (timeout): {}", timeout_epoch);
+    println!("    - Input since: 0x{:x}", timeout_since);
 
     // Setup fee calculator
     let fee_rate = 1000u64; // shannon per KB
@@ -74,12 +95,12 @@ pub fn build_refund_transaction(
 
     let spillman_out_point = OutPoint::new_builder()
         .tx_hash(ckb_types::packed::Byte32::from_slice(&spillman_tx_hash)?)
-        .index(config.spillman_lock.index.pack())
+        .index(config.spillman_lock.index)
         .build();
 
     let spillman_dep = ckb_types::packed::CellDep::new_builder()
         .out_point(spillman_out_point)
-        .dep_type(ckb_types::core::DepType::Code.into())
+        .dep_type(ckb_types::core::DepType::Code)
         .build();
 
     // Get Auth cell dep from config
@@ -88,18 +109,18 @@ pub fn build_refund_transaction(
 
     let auth_out_point = OutPoint::new_builder()
         .tx_hash(ckb_types::packed::Byte32::from_slice(&auth_tx_hash)?)
-        .index(config.auth.index.pack())
+        .index(config.auth.index)
         .build();
 
     let auth_dep = ckb_types::packed::CellDep::new_builder()
         .out_point(auth_out_point)
-        .dep_type(ckb_types::core::DepType::Code.into())
+        .dep_type(ckb_types::core::DepType::Code)
         .build();
 
     // Calculate merchant's minimum occupied capacity (for co-fund mode)
     let merchant_capacity = if let Some(ref merchant_lock) = merchant_lock_script {
         let merchant_cell = CellOutput::new_builder()
-            .capacity(0u64.pack())
+            .capacity(0u64)
             .lock(merchant_lock.clone())
             .build();
 
@@ -130,7 +151,7 @@ pub fn build_refund_transaction(
             builder = builder
                 .output(
                     CellOutput::new_builder()
-                        .capacity(user_cap.pack())
+                        .capacity(user_cap)
                         .lock(user_lock_script.clone())
                         .build(),
                 )
@@ -140,7 +161,7 @@ pub fn build_refund_transaction(
             builder = builder
                 .output(
                     CellOutput::new_builder()
-                        .capacity(merchant_capacity.pack())
+                        .capacity(merchant_capacity)
                         .lock(merchant_lock_script.as_ref().unwrap().clone())
                         .build(),
                 )
@@ -151,7 +172,7 @@ pub fn build_refund_transaction(
             builder = builder
                 .output(
                     CellOutput::new_builder()
-                        .capacity(user_cap.pack())
+                        .capacity(user_cap)
                         .lock(user_lock_script.clone())
                         .build(),
                 )
@@ -241,46 +262,47 @@ pub fn build_refund_transaction(
     // Sign transaction (both merchant and user)
     println!("\n  🔐 签名交易...");
 
-    // Parse private keys
+    // Parse private keys using ckb-crypto
+    use crate::utils::crypto::pubkey_hash;
+
     let user_privkey_hex = &config.user.private_key;
-    let user_privkey_hex_trimmed = user_privkey_hex.trim_start_matches("0x");
-    let user_privkey_bytes = hex::decode(user_privkey_hex_trimmed)
-        .map_err(|e| anyhow!("Failed to decode user private key hex: {}", e))?;
-    let user_key = secp256k1::SecretKey::from_slice(&user_privkey_bytes)
-        .map_err(|e| anyhow!("Invalid user private key: {}", e))?;
+    let user_privkey = Privkey::from_str(user_privkey_hex)
+        .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
+    let user_pubkey = user_privkey.pubkey().map_err(|e| anyhow!("Failed to get user pubkey: {:?}", e))?;
+    let user_pubkey_hash_from_privkey = pubkey_hash(&user_pubkey);
 
     let merchant_privkey_hex = &config.merchant.private_key;
-    let merchant_privkey_hex_trimmed = merchant_privkey_hex.trim_start_matches("0x");
-    let merchant_privkey_bytes = hex::decode(merchant_privkey_hex_trimmed)
-        .map_err(|e| anyhow!("Failed to decode merchant private key hex: {}", e))?;
-    let merchant_key = secp256k1::SecretKey::from_slice(&merchant_privkey_bytes)
-        .map_err(|e| anyhow!("Invalid merchant private key: {}", e))?;
+    let merchant_privkey = Privkey::from_str(merchant_privkey_hex)
+        .map_err(|e| anyhow!("Failed to parse merchant private key: {:?}", e))?;
+    let merchant_pubkey = merchant_privkey.pubkey().map_err(|e| anyhow!("Failed to get merchant pubkey: {:?}", e))?;
+    let merchant_pubkey_hash_from_privkey = pubkey_hash(&merchant_pubkey);
+
+    // Verify pubkey hashes match Spillman Lock args
+    let expected_merchant_hash = &args_bytes[0..20];
+    let expected_user_hash = &args_bytes[20..40];
+
+    if merchant_pubkey_hash_from_privkey != expected_merchant_hash {
+        return Err(anyhow!("Merchant pubkey hash mismatch! The private key in config.toml doesn't match the Spillman Lock args."));
+    }
+    if user_pubkey_hash_from_privkey != expected_user_hash {
+        return Err(anyhow!("User pubkey hash mismatch! The private key in config.toml doesn't match the Spillman Lock args."));
+    }
 
     // Compute signing message (raw tx without cell_deps)
     let signing_message = compute_signing_message(&tx);
 
-    println!("    - Signing message: {}", hex::encode(&signing_message));
-
-    // Sign with secp256k1 (merchant first, then user)
-    let secp = secp256k1::Secp256k1::new();
-
-    let merchant_message = secp256k1::Message::from_digest_slice(&signing_message)
-        .map_err(|e| anyhow!("Failed to create merchant message: {}", e))?;
-    let merchant_signature = secp.sign_ecdsa_recoverable(&merchant_message, &merchant_key);
-    let (merchant_recid, merchant_sig_bytes) = merchant_signature.serialize_compact();
-    let mut merchant_sig = [0u8; 65];
-    merchant_sig[0..64].copy_from_slice(&merchant_sig_bytes);
-    merchant_sig[64] = merchant_recid as i32 as u8;
+    // Sign with ckb-crypto (merchant first, then user)
+    let merchant_sig = merchant_privkey
+        .sign_recoverable(&signing_message.into())
+        .map_err(|e| anyhow!("Failed to sign with merchant key: {:?}", e))?
+        .serialize();
 
     println!("    ✓ Merchant 签名完成");
 
-    let user_message = secp256k1::Message::from_digest_slice(&signing_message)
-        .map_err(|e| anyhow!("Failed to create user message: {}", e))?;
-    let user_signature = secp.sign_ecdsa_recoverable(&user_message, &user_key);
-    let (user_recid, user_sig_bytes) = user_signature.serialize_compact();
-    let mut user_sig = [0u8; 65];
-    user_sig[0..64].copy_from_slice(&user_sig_bytes);
-    user_sig[64] = user_recid as i32 as u8;
+    let user_sig = user_privkey
+        .sign_recoverable(&signing_message.into())
+        .map_err(|e| anyhow!("Failed to sign with user key: {:?}", e))?
+        .serialize();
 
     println!("    ✓ User 签名完成");
 
@@ -320,11 +342,13 @@ pub fn build_refund_transaction(
 /// Compute signing message for Spillman Lock
 /// This is the same as in test cases: blake2b_256(raw_tx without cell_deps)
 fn compute_signing_message(tx: &TransactionView) -> [u8; 32] {
+    use ckb_types::packed::CellDepVec;
     let raw_tx = tx
         .data()
         .raw()
         .as_builder()
-        .cell_deps(Default::default())
+        .cell_deps(CellDepVec::default())
         .build();
+
     blake2b_256(raw_tx.as_slice())
 }

@@ -1,14 +1,10 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::{Privkey, Pubkey};
-use ckb_hash::blake2b_256;
+use ckb_sdk::util::blake160;
 
-/// Calculate pubkey hash using Blake2b-160
+/// Calculate pubkey hash using Blake160 (CKB standard)
 pub fn pubkey_hash(pubkey: &Pubkey) -> [u8; 20] {
-    let pubkey_bytes = pubkey.serialize();
-    let hash = blake2b_256(&pubkey_bytes);
-    let mut result = [0u8; 20];
-    result.copy_from_slice(&hash[0..20]);
-    result
+    blake160(&pubkey.serialize()).into()
 }
 
 /// Parse private key from hex string
@@ -24,12 +20,14 @@ pub fn parse_privkey(hex: &str) -> Result<Privkey> {
     Ok(Privkey::from_slice(&bytes))
 }
 
-/// Spillman Lock Args structure (49 bytes)
+/// Spillman Lock Args structure (50 bytes)
+/// Layout: merchant_lock_arg(20) + user_pubkey_hash(20) + timeout_epoch(8) + algorithm_id(1) + version(1)
 #[derive(Debug, Clone)]
 pub struct SpillmanLockArgs {
     pub merchant_pubkey_hash: [u8; 20],
     pub user_pubkey_hash: [u8; 20],
     pub timeout_epoch: u64,
+    pub algorithm_id: u8,  // 0 for single-sig, 6 for multi-sig
     pub version: u8,
 }
 
@@ -43,15 +41,17 @@ impl SpillmanLockArgs {
             merchant_pubkey_hash,
             user_pubkey_hash,
             timeout_epoch,
+            algorithm_id: 0,  // Single-sig mode
             version: 0,
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(49);
+        let mut bytes = Vec::with_capacity(50);
         bytes.extend_from_slice(&self.merchant_pubkey_hash);
         bytes.extend_from_slice(&self.user_pubkey_hash);
         bytes.extend_from_slice(&self.timeout_epoch.to_le_bytes());
+        bytes.push(self.algorithm_id);
         bytes.push(self.version);
         bytes
     }

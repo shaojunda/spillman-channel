@@ -60,7 +60,6 @@ pub async fn build_funding_transaction(
     let sender = Script::from(user_address);
 
     // Build ScriptUnlocker for signing
-    // Convert Privkey to secp256k1::SecretKey
     // We need to re-parse the private key from the config
     let privkey_hex = &config.user.private_key;
     let privkey_hex_trimmed = privkey_hex.trim_start_matches("0x");
@@ -85,7 +84,7 @@ pub async fn build_funding_transaction(
 
     // Build Spillman Lock cell output
     let spillman_cell = CellOutput::new_builder()
-        .capacity((capacity_shannon as u64).pack())
+        .capacity(capacity_shannon)
         .lock(spillman_lock_script.clone())
         .build();
 
@@ -157,7 +156,7 @@ pub async fn build_cofund_funding_transaction(
     // Calculate merchant's minimum occupied capacity
     let merchant_lock = Script::from(merchant_address);
     let temp_merchant_cell = CellOutput::new_builder()
-        .capacity(0u64.pack())
+        .capacity(0u64)
         .lock(merchant_lock.clone())
         .build();
 
@@ -266,18 +265,6 @@ pub async fn build_cofund_funding_transaction(
         merchant_input_capacity / 100_000_000
     );
 
-    // Debug: 显示每个 merchant cell 的详细信息
-    for (idx, cell) in merchant_cells.iter().enumerate() {
-        let has_type = cell.output.type_().to_opt().is_some();
-        let capacity = Unpack::<u64>::unpack(&cell.output.capacity());
-        println!(
-            "    Cell {}: {} CKB, has_type_script: {}",
-            idx,
-            capacity as f64 / 100_000_000.0,
-            has_type
-        );
-    }
-
     // Verify merchant has enough capacity
     if merchant_input_capacity < merchant_capacity_shannon {
         return Err(anyhow!(
@@ -323,7 +310,7 @@ pub async fn build_cofund_funding_transaction(
 
     // Minimum change cell capacity for both user and merchant
     let min_user_change = CellOutput::new_builder()
-        .capacity(0u64.pack())
+        .capacity(0u64)
         .lock(user_lock.clone())
         .build()
         .occupied_capacity(ckb_types::core::Capacity::bytes(0).unwrap())
@@ -331,7 +318,7 @@ pub async fn build_cofund_funding_transaction(
         .as_u64();
 
     let min_merchant_change = CellOutput::new_builder()
-        .capacity(0u64.pack())
+        .capacity(0u64)
         .lock(merchant_lock.clone())
         .build()
         .occupied_capacity(ckb_types::core::Capacity::bytes(0).unwrap())
@@ -340,7 +327,7 @@ pub async fn build_cofund_funding_transaction(
 
     // Build Spillman Lock output
     let spillman_cell = CellOutput::new_builder()
-        .capacity(spillman_capacity.pack())
+        .capacity(spillman_capacity)
         .lock(spillman_lock_script.clone())
         .build();
 
@@ -365,7 +352,7 @@ pub async fn build_cofund_funding_transaction(
         if let Some(change_cap) = user_change_opt {
             if change_cap >= min_user_change {
                 let change_cell = CellOutput::new_builder()
-                    .capacity(change_cap.pack())
+                    .capacity(change_cap)
                     .lock(user_lock.clone())
                     .build();
                 builder = builder.output(change_cell).output_data(Bytes::new().pack());
@@ -376,7 +363,7 @@ pub async fn build_cofund_funding_transaction(
         if let Some(change_cap) = merchant_change_opt {
             if change_cap >= min_merchant_change {
                 let change_cell = CellOutput::new_builder()
-                    .capacity(change_cap.pack())
+                    .capacity(change_cap)
                     .lock(merchant_lock.clone())
                     .build();
                 builder = builder.output(change_cell).output_data(Bytes::new().pack());
