@@ -9,7 +9,7 @@ use crate::tx_builder::funding_v2;
 use crate::tx_builder::spillman_lock::build_spillman_lock_script;
 use crate::utils::config::load_config;
 use crate::utils::crypto::parse_privkey;
-use crate::utils::rpc::get_current_epoch;
+use crate::utils::rpc::get_current_timestamp;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ChannelInfo {
@@ -67,13 +67,25 @@ pub async fn execute(
     println!("\n🔗 连接到 CKB 网络...");
     let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
 
-    // Get current epoch
-    let current_epoch = get_current_epoch(&rpc_client).await?;
-    let timeout_epoch = current_epoch + timeout_epochs;
+    // Get current timestamp and calculate timeout
+    // Note: timeout_epochs is converted to seconds (1 epoch ≈ 4 hours = 14400 seconds)
+    let current_timestamp = get_current_timestamp(&rpc_client).await?;
+    let timeout_seconds = timeout_epochs * 14400; // 4 hours per epoch
+    let timeout_timestamp = current_timestamp + timeout_seconds;
 
     println!("✓ RPC URL: {}", config.network.rpc_url);
-    println!("✓ 当前 epoch: {}", current_epoch);
-    println!("✓ 超时 epoch: {} (+{} epochs)", timeout_epoch, timeout_epochs);
+    println!("✓ 当前时间戳: {} ({} UTC)", current_timestamp,
+        chrono::DateTime::from_timestamp(current_timestamp as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "Invalid".to_string())
+    );
+    println!("✓ 超时时间戳: {} (+{} epochs ≈ {} hours)",
+        timeout_timestamp, timeout_epochs, timeout_epochs * 4);
+    println!("  超时时间: {}",
+        chrono::DateTime::from_timestamp(timeout_timestamp as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            .unwrap_or_else(|| "Invalid".to_string())
+    );
 
     // 4. Build Spillman Lock script
     println!("\n🔒 构建 Spillman Lock script...");
@@ -81,7 +93,7 @@ pub async fn execute(
         &config,
         &user_pubkey,
         &merchant_pubkey,
-        timeout_epoch,
+        timeout_timestamp,
     )?;
 
     let script_hash = spillman_lock_script.calc_script_hash();
@@ -137,8 +149,8 @@ pub async fn execute(
         merchant_address: merchant_address.unwrap_or(&config.merchant.address).to_string(),
         capacity_ckb: capacity,
         timeout_epochs,
-        current_epoch,
-        timeout_epoch,
+        current_epoch: current_timestamp,  // Now storing timestamp instead of epoch
+        timeout_epoch: timeout_timestamp,  // Now storing timestamp instead of epoch
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
@@ -153,7 +165,7 @@ pub async fn execute(
     // 7. Build refund transaction template
     println!("\n📝 构建 Refund Transaction 模板...");
     println!("⚠️  Refund transaction 模板待实现");
-    // TODO: build_refund_template(&config, &spillman_lock_script, capacity, timeout_epoch)?;
+    // TODO: build_refund_template(&config, &spillman_lock_script, capacity, timeout_timestamp)?;
 
     println!("\n✅ set-up 命令执行完成");
     println!("\n📌 下一步操作:");
@@ -216,13 +228,25 @@ pub async fn execute_v2(
     println!("\n🔗 连接到 CKB 网络...");
     let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
 
-    // Get current epoch
-    let current_epoch = get_current_epoch(&rpc_client).await?;
-    let timeout_epoch = current_epoch + timeout_epochs;
+    // Get current timestamp and calculate timeout
+    // Note: timeout_epochs is converted to seconds (1 epoch ≈ 4 hours = 14400 seconds)
+    let current_timestamp = get_current_timestamp(&rpc_client).await?;
+    let timeout_seconds = timeout_epochs * 14400; // 4 hours per epoch
+    let timeout_timestamp = current_timestamp + timeout_seconds;
 
     println!("✓ RPC URL: {}", config.network.rpc_url);
-    println!("✓ 当前 epoch: {}", current_epoch);
-    println!("✓ 超时 epoch: {} (+{} epochs)", timeout_epoch, timeout_epochs);
+    println!("✓ 当前时间戳: {} ({} UTC)", current_timestamp,
+        chrono::DateTime::from_timestamp(current_timestamp as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "Invalid".to_string())
+    );
+    println!("✓ 超时时间戳: {} (+{} epochs ≈ {} hours)",
+        timeout_timestamp, timeout_epochs, timeout_epochs * 4);
+    println!("  超时时间: {}",
+        chrono::DateTime::from_timestamp(timeout_timestamp as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            .unwrap_or_else(|| "Invalid".to_string())
+    );
 
     // 4. Build Spillman Lock script
     println!("\n🔒 构建 Spillman Lock script...");
@@ -230,7 +254,7 @@ pub async fn execute_v2(
         &config,
         &user_pubkey,
         &merchant_pubkey,
-        timeout_epoch,
+        timeout_timestamp,
     )?;
 
     let script_hash = spillman_lock_script.calc_script_hash();
@@ -291,8 +315,8 @@ pub async fn execute_v2(
         merchant_address: merchant_address.unwrap_or(&config.merchant.address).to_string(),
         capacity_ckb: capacity,
         timeout_epochs,
-        current_epoch,
-        timeout_epoch,
+        current_epoch: current_timestamp,  // Now storing timestamp instead of epoch
+        timeout_epoch: timeout_timestamp,  // Now storing timestamp instead of epoch
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
@@ -307,7 +331,7 @@ pub async fn execute_v2(
     // 7. Build refund transaction template
     println!("\n📝 构建 Refund Transaction 模板...");
     println!("⚠️  Refund transaction 模板待实现");
-    // TODO: build_refund_template(&config, &spillman_lock_script, capacity, timeout_epoch)?;
+    // TODO: build_refund_template(&config, &spillman_lock_script, capacity, timeout_timestamp)?;
 
     println!("\n✅ set-up 命令执行完成 (v2)");
     println!("\n📌 下一步操作:");

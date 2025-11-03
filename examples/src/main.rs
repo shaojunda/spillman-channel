@@ -106,6 +106,10 @@ enum Commands {
         /// 配置文件路径
         #[arg(long, default_value = "config.toml")]
         config: String,
+
+        /// 使用 refund_v2 实现（新版本）
+        #[arg(long, default_value = "false")]
+        use_v2: bool,
     },
 }
 
@@ -172,8 +176,15 @@ async fn main() -> Result<()> {
         Commands::Refund {
             tx_file,
             config,
+            use_v2,
         } => {
-            commands::refund::execute(&tx_file, &config).await?;
+            if use_v2 {
+                // Use v2 implementation (refund_v2)
+                commands::refund::execute_v2(&tx_file, &config).await?;
+            } else {
+                // Use v1 implementation (original refund)
+                commands::refund::execute(&tx_file, &config).await?;
+            }
         }
     }
 
