@@ -4,3 +4,4 @@ config.toml
 
 
 secrets/
+src/.DS_Store
