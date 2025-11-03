@@ -105,17 +105,17 @@ const AUTH_ALGORITHM_CKB_MULTISIG: u8 = 6; // CKB multisig
 //         N = pubkey_cnt (1 byte, total N pubkeys)
 //         PubKeyHashX = blake160(pubkey) (20 bytes each)
 //   user_pubkey_hash: 20 bytes - blake160(user_pubkey)
-//   timeout: 8 bytes - epoch number (little-endian u64)
+//   timeout: 8 bytes - timestamp since value (little-endian u64)
 //   algorithm_id: 1 byte - 0 for single-sig, 6 for multi-sig
 //   version: 1 byte - set to 0
 const MERCHANT_LOCK_ARG_LEN: usize = 20;
 const USER_PUBKEY_HASH_LEN: usize = 20;
-const TIMEOUT_EPOCH_LEN: usize = 8;
+const TIMEOUT_LEN: usize = 8;
 const ALGORITHM_ID_LEN: usize = 1;
 const VERSION_LEN: usize = 1;
 const MULTISIG_HEADER_LEN: usize = 4; // S + R + M + N
 const ARGS_LEN: usize =
-    MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + ALGORITHM_ID_LEN + VERSION_LEN; // 50 bytes
+    MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN + ALGORITHM_ID_LEN + VERSION_LEN; // 50 bytes
 
 // Script args field offsets (removed - use direct indexing)
 
@@ -179,15 +179,15 @@ fn verify() -> Result<(), Error> {
     // Parse args fields
     let merchant_lock_arg = &args[0..MERCHANT_LOCK_ARG_LEN];
     let user_pubkey_hash = &args[MERCHANT_LOCK_ARG_LEN..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN];
-    let timeout_epoch = u64::from_le_bytes(
+    let timeout = u64::from_le_bytes(
         args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN
-            ..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN]
+            ..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN]
             .try_into()
             .unwrap(),
     );
-    let algorithm_id = args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN];
+    let algorithm_id = args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN];
     let version =
-        args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + ALGORITHM_ID_LEN];
+        args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN + ALGORITHM_ID_LEN];
 
     if version != 0 {
         return Err(Error::UnsupportedVersion);
@@ -256,7 +256,7 @@ fn verify() -> Result<(), Error> {
             merchant_algorithm_id,
             &merchant_lock_arg_for_auth,
             user_pubkey_hash,
-            timeout_epoch,
+            timeout,
             message,
             witness,
             &tx,
@@ -296,7 +296,7 @@ fn verify_timeout_path(
     merchant_algorithm_id: u8,
     merchant_lock_arg: &[u8],
     user_pubkey_hash: &[u8],
-    timeout_epoch: u64,
+    timeout: u64,
     message: [u8; 32],
     witness: Vec<u8>,
     tx: &Transaction,
@@ -309,10 +309,10 @@ fn verify_timeout_path(
 
     let raw_since = load_input_since(0, Source::GroupInput)?;
     let since = Since::new(raw_since);
-    let timeout = Since::new(timeout_epoch);
+    let timeout_since = Since::new(timeout);
 
     // Security: Only proceed with verification if since >= timeout
-    if since >= timeout {
+    if since >= timeout_since {
         // Verify user signature (always single-sig)
         verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
 
