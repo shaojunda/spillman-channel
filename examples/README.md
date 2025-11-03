@@ -16,12 +16,6 @@ cp config.toml.example config.toml
 # Edit config.toml with your keys and addresses
 ```
 
-### 2. Run
-
-```bash
-cargo run --bin full_flow
-```
-
 ## Prerequisites
 
 1. **Deploy the contract**: Deploy Spillman Lock contract first
