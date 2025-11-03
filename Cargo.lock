@@ -2980,6 +2980,7 @@ name = "spillman-channel-examples"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "ckb-crypto 1.0.0",
  "ckb-hash 1.0.0",
  "ckb-jsonrpc-types 1.0.0",
@@ -2987,6 +2988,7 @@ dependencies = [
  "ckb-types 1.0.0",
  "clap",
  "hex",
+ "molecule",
  "secp256k1",
  "serde",
  "serde_json",

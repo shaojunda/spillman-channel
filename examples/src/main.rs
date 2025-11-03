@@ -42,6 +42,10 @@ enum Commands {
         /// 是否使用 co-fund 模式（User + Merchant 共同出资）
         #[arg(long, default_value = "false")]
         co_fund: bool,
+
+        /// 使用 funding_v2 实现（新版本）
+        #[arg(long, default_value = "false")]
+        use_v2: bool,
     },
 
     /// 签名交易
@@ -117,16 +121,31 @@ async fn main() -> Result<()> {
             capacity,
             timeout_epochs,
             co_fund,
+            use_v2,
         } => {
-            commands::setup::execute(
-                &config,
-                &output_dir,
-                merchant_address.as_deref(),
-                capacity,
-                timeout_epochs,
-                co_fund,
-            )
-            .await?;
+            if use_v2 {
+                // Use v2 implementation (funding_v2)
+                commands::setup::execute_v2(
+                    &config,
+                    &output_dir,
+                    merchant_address.as_deref(),
+                    capacity,
+                    timeout_epochs,
+                    co_fund,
+                )
+                .await?;
+            } else {
+                // Use v1 implementation (original funding)
+                commands::setup::execute(
+                    &config,
+                    &output_dir,
+                    merchant_address.as_deref(),
+                    capacity,
+                    timeout_epochs,
+                    co_fund,
+                )
+                .await?;
+            }
         }
         Commands::SignTx {
             tx_file,
