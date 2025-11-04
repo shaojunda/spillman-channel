@@ -1,2 +1,2 @@
 fa1666e2510fffca26470cbabac229075ffdeeaafc64ac714df77cea0b6fc9e4  build/release/spillman-lock
-ac8d82472e5ea8ec59bdfc558ef8e11f47d0b7cd11ea9a3ae0ebde819850e306  build/release/spillman-lock.debug
+abfbdc5319a9b3cd2a0fa93dc5fc183d93bb358e20f15804ce0dc26940b88bf8  build/release/spillman-lock.debug
