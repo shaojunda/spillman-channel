@@ -104,8 +104,8 @@ pub fn generate_tx_filename(tx_type: &str, suffix: Option<&str>) -> String {
         .as_secs();
 
     if let Some(s) = suffix {
-        format!("examples/secrets/{}_{}_{}.json", tx_type, s, timestamp)
+        format!("secrets/{}_{}_{}.json", tx_type, s, timestamp)
     } else {
-        format!("examples/secrets/{}_{}.json", tx_type, timestamp)
+        format!("secrets/{}_{}.json", tx_type, timestamp)
     }
 }

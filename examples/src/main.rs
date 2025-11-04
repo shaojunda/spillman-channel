@@ -73,10 +73,6 @@ enum Commands {
         #[arg(long, default_value = "secrets/channel_info.json")]
         channel_file: String,
 
-        /// 用户私钥文件路径
-        #[arg(long)]
-        privkey_path: String,
-
         /// 配置文件路径
         #[arg(long, default_value = "config.toml")]
         config: String,
@@ -161,10 +157,9 @@ async fn main() -> Result<()> {
         Commands::Pay {
             amount,
             channel_file,
-            privkey_path,
             config,
         } => {
-            commands::pay::execute(&amount, &channel_file, &privkey_path, &config).await?;
+            commands::pay::execute(&amount, &channel_file, &config).await?;
         }
         Commands::Settle {
             tx_file,
