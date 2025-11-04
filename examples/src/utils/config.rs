@@ -26,7 +26,9 @@ pub struct KeyConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ChannelConfig {
     pub capacity_ckb: u64,
-    pub timeout_epochs: u64,
+    #[serde(default)]
+    pub timeout_epochs: u64, // Deprecated, keeping for backwards compatibility
+    pub timeout_timestamp: u64,
     pub tx_fee_shannon: u64,
 }
 

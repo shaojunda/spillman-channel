@@ -59,8 +59,8 @@ pub async fn execute(
         None
     };
 
-    // Get timeout epoch from config
-    let timeout_epoch = config.channel.timeout_epochs;
+    // Get timeout timestamp from config
+    let timeout_timestamp = config.channel.timeout_timestamp;
 
     // Build refund transaction
     println!("\n🔨 构建 Refund 交易...");
@@ -76,7 +76,7 @@ pub async fn execute(
         &funding_tx,
         user_lock,
         merchant_lock,
-        timeout_epoch,
+        timeout_timestamp,
         &output_path,
     )?;
 
@@ -88,7 +88,7 @@ pub async fn execute(
     println!("  - 按照 Spillman Channel 设计：");
     println!("    1. Merchant 在通道创建时预签名（保证用户退款权利）");
     println!("    2. User 在超时后补充签名");
-    println!("  - 等待超时 epoch ({}) 后可以广播此交易", timeout_epoch);
+    println!("  - 等待超时时间戳 ({}) 后可以广播此交易", timeout_timestamp);
     println!("  - 使用 ckb-cli 广播: ckb-cli tx send --tx-file {}", output_path);
     if is_cofund {
         println!("\n📊 Co-fund 模式退款：");

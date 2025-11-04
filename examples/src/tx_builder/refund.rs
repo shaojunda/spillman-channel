@@ -25,7 +25,7 @@ const UNLOCK_TYPE_TIMEOUT: u8 = 0x01;
 /// - Input: Spillman Lock cell (from funding tx output 0)
 /// - Output 0: User's address (full amount or user's portion)
 /// - Output 1 (co-fund only): Merchant's address (merchant's portion)
-/// - Since: timeout_epoch (time lock)
+/// - Since: timeout_timestamp (time lock)
 /// - Witness: Empty placeholder (to be filled with signatures)
 ///
 /// Signing order:
@@ -37,7 +37,7 @@ pub fn build_refund_transaction(
     funding_tx: &TransactionView,
     user_lock_script: Script,
     merchant_lock_script: Option<Script>,
-    _timeout_epoch: u64,  // Not used - we read from Spillman Lock args
+    _timeout_timestamp: u64,  // Not used - we read from Spillman Lock args
     output_path: &str,
 ) -> Result<TransactionView> {
     println!("  📋 构建 Refund 交易...");

@@ -21,12 +21,12 @@ pub fn parse_privkey(hex: &str) -> Result<Privkey> {
 }
 
 /// Spillman Lock Args structure (50 bytes)
-/// Layout: merchant_lock_arg(20) + user_pubkey_hash(20) + timeout_epoch(8) + algorithm_id(1) + version(1)
+/// Layout: merchant_lock_arg(20) + user_pubkey_hash(20) + timeout_timestamp(8) + algorithm_id(1) + version(1)
 #[derive(Debug, Clone)]
 pub struct SpillmanLockArgs {
     pub merchant_pubkey_hash: [u8; 20],
     pub user_pubkey_hash: [u8; 20],
-    pub timeout_epoch: u64,
+    pub timeout_timestamp: u64,
     pub algorithm_id: u8,  // 0 for single-sig, 6 for multi-sig
     pub version: u8,
 }
@@ -35,12 +35,12 @@ impl SpillmanLockArgs {
     pub fn new(
         merchant_pubkey_hash: [u8; 20],
         user_pubkey_hash: [u8; 20],
-        timeout_epoch: u64,
+        timeout_timestamp: u64,
     ) -> Self {
         Self {
             merchant_pubkey_hash,
             user_pubkey_hash,
-            timeout_epoch,
+            timeout_timestamp,
             algorithm_id: 0,  // Single-sig mode
             version: 0,
         }
@@ -50,7 +50,7 @@ impl SpillmanLockArgs {
         let mut bytes = Vec::with_capacity(50);
         bytes.extend_from_slice(&self.merchant_pubkey_hash);
         bytes.extend_from_slice(&self.user_pubkey_hash);
-        bytes.extend_from_slice(&self.timeout_epoch.to_le_bytes());
+        bytes.extend_from_slice(&self.timeout_timestamp.to_le_bytes());
         bytes.push(self.algorithm_id);
         bytes.push(self.version);
         bytes

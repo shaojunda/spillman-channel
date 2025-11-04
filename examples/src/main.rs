@@ -35,9 +35,9 @@ enum Commands {
         #[arg(long)]
         capacity: Option<u64>,
 
-        /// 超时 epoch（可选，覆盖配置文件）
+        /// 超时时间戳（Unix timestamp，可选，覆盖配置文件）
         #[arg(long)]
-        timeout_epochs: Option<u64>,
+        timeout_timestamp: Option<u64>,
 
         /// 是否使用 co-fund 模式（User + Merchant 共同出资）
         #[arg(long, default_value = "false")]
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
             output_dir,
             merchant_address,
             capacity,
-            timeout_epochs,
+            timeout_timestamp,
             co_fund,
             use_v2,
         } => {
@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
                     &output_dir,
                     merchant_address.as_deref(),
                     capacity,
-                    timeout_epochs,
+                    timeout_timestamp,
                     co_fund,
                 )
                 .await?;
@@ -145,7 +145,7 @@ async fn main() -> Result<()> {
                     &output_dir,
                     merchant_address.as_deref(),
                     capacity,
-                    timeout_epochs,
+                    timeout_timestamp,
                     co_fund,
                 )
                 .await?;

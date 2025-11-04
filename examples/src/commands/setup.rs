@@ -9,16 +9,15 @@ use crate::tx_builder::funding_v2;
 use crate::tx_builder::spillman_lock::build_spillman_lock_script;
 use crate::utils::config::load_config;
 use crate::utils::crypto::parse_privkey;
-use crate::utils::rpc::get_current_timestamp;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ChannelInfo {
     user_address: String,
     merchant_address: String,
     capacity_ckb: u64,
-    timeout_epochs: u64,
-    current_epoch: u64,
-    timeout_epoch: u64,
+    timeout_epochs: u64, // Deprecated, keeping for backwards compatibility
+    current_timestamp: u64,
+    timeout_timestamp: u64,
     spillman_lock_script_hash: String,
     funding_tx_hash: String,
     funding_output_index: u32,
@@ -29,7 +28,7 @@ pub async fn execute(
     output_dir: &str,
     merchant_address: Option<&str>,
     capacity: Option<u64>,
-    timeout_epochs: Option<u64>,
+    timeout_timestamp: Option<u64>,
     co_fund: bool,
 ) -> Result<()> {
     println!("🚀 执行 set-up 命令 - 准备 Spillman Channel");
@@ -43,7 +42,7 @@ pub async fn execute(
     // Use values from config file, allow CLI to override
     let user_address = &config.user.address;
     let capacity = capacity.unwrap_or(config.channel.capacity_ckb);
-    let timeout_epochs = timeout_epochs.unwrap_or(config.channel.timeout_epochs);
+    let timeout_timestamp = timeout_timestamp.unwrap_or(config.channel.timeout_timestamp);
 
     // 2. Parse user and merchant info
     println!("\n👤 解析用户和商户信息...");
@@ -67,11 +66,11 @@ pub async fn execute(
     println!("\n🔗 连接到 CKB 网络...");
     let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
 
-    // Get current timestamp and calculate timeout
-    // Note: timeout_epochs is converted to seconds (1 epoch ≈ 4 hours = 14400 seconds)
-    let current_timestamp = get_current_timestamp(&rpc_client).await?;
-    let timeout_seconds = timeout_epochs * 14400; // 4 hours per epoch
-    let timeout_timestamp = current_timestamp + timeout_seconds;
+    // Get current timestamp from system time
+    let current_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| anyhow!("Failed to get system time: {}", e))?
+        .as_secs();
 
     println!("✓ RPC URL: {}", config.network.rpc_url);
     println!("✓ 当前时间戳: {} ({} UTC)", current_timestamp,
@@ -79,12 +78,29 @@ pub async fn execute(
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
     );
-    println!("✓ 超时时间戳: {} (+{} epochs ≈ {} hours)",
-        timeout_timestamp, timeout_epochs, timeout_epochs * 4);
+    println!("✓ 超时时间戳: {}", timeout_timestamp);
     println!("  超时时间: {}",
         chrono::DateTime::from_timestamp(timeout_timestamp as i64, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
+    );
+
+    // Validate timeout timestamp must be at least 20 minutes (1200 seconds) in the future
+    let min_timeout = current_timestamp + 1200; // 20 minutes = 1200 seconds
+    if timeout_timestamp < min_timeout {
+        return Err(anyhow!(
+            "超时时间戳必须大于当前时间至少 20 分钟！\n\
+             当前时间戳: {}\n\
+             最小超时时间戳: {} (当前时间 + 20 分钟)\n\
+             您设置的超时时间戳: {}",
+            current_timestamp,
+            min_timeout,
+            timeout_timestamp
+        ));
+    }
+    println!("✓ 超时时间验证通过 (距离当前时间 {} 秒 ≈ {} 分钟)",
+        timeout_timestamp - current_timestamp,
+        (timeout_timestamp - current_timestamp) / 60
     );
 
     // 4. Build Spillman Lock script
@@ -148,9 +164,9 @@ pub async fn execute(
         user_address: user_address.to_string(),
         merchant_address: merchant_address.unwrap_or(&config.merchant.address).to_string(),
         capacity_ckb: capacity,
-        timeout_epochs,
-        current_epoch: current_timestamp,  // Now storing timestamp instead of epoch
-        timeout_epoch: timeout_timestamp,  // Now storing timestamp instead of epoch
+        timeout_epochs: 0, // Deprecated, keeping for backwards compatibility
+        current_timestamp,
+        timeout_timestamp,
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
@@ -190,7 +206,7 @@ pub async fn execute_v2(
     output_dir: &str,
     merchant_address: Option<&str>,
     capacity: Option<u64>,
-    timeout_epochs: Option<u64>,
+    timeout_timestamp: Option<u64>,
     co_fund: bool,
 ) -> Result<()> {
     println!("🚀 执行 set-up 命令 - 准备 Spillman Channel (v2)");
@@ -204,7 +220,7 @@ pub async fn execute_v2(
     // Use values from config file, allow CLI to override
     let user_address = &config.user.address;
     let capacity = capacity.unwrap_or(config.channel.capacity_ckb);
-    let timeout_epochs = timeout_epochs.unwrap_or(config.channel.timeout_epochs);
+    let timeout_timestamp = timeout_timestamp.unwrap_or(config.channel.timeout_timestamp);
 
     // 2. Parse user and merchant info
     println!("\n👤 解析用户和商户信息...");
@@ -228,11 +244,11 @@ pub async fn execute_v2(
     println!("\n🔗 连接到 CKB 网络...");
     let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
 
-    // Get current timestamp and calculate timeout
-    // Note: timeout_epochs is converted to seconds (1 epoch ≈ 4 hours = 14400 seconds)
-    let current_timestamp = get_current_timestamp(&rpc_client).await?;
-    let timeout_seconds = timeout_epochs * 14400; // 4 hours per epoch
-    let timeout_timestamp = current_timestamp + timeout_seconds;
+    // Get current timestamp from system time
+    let current_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| anyhow!("Failed to get system time: {}", e))?
+        .as_secs();
 
     println!("✓ RPC URL: {}", config.network.rpc_url);
     println!("✓ 当前时间戳: {} ({} UTC)", current_timestamp,
@@ -240,12 +256,29 @@ pub async fn execute_v2(
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
     );
-    println!("✓ 超时时间戳: {} (+{} epochs ≈ {} hours)",
-        timeout_timestamp, timeout_epochs, timeout_epochs * 4);
+    println!("✓ 超时时间戳: {}", timeout_timestamp);
     println!("  超时时间: {}",
         chrono::DateTime::from_timestamp(timeout_timestamp as i64, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
+    );
+
+    // Validate timeout timestamp must be at least 20 minutes (1200 seconds) in the future
+    let min_timeout = current_timestamp + 1200; // 20 minutes = 1200 seconds
+    if timeout_timestamp < min_timeout {
+        return Err(anyhow!(
+            "超时时间戳必须大于当前时间至少 20 分钟！\n\
+             当前时间戳: {}\n\
+             最小超时时间戳: {} (当前时间 + 20 分钟)\n\
+             您设置的超时时间戳: {}",
+            current_timestamp,
+            min_timeout,
+            timeout_timestamp
+        ));
+    }
+    println!("✓ 超时时间验证通过 (距离当前时间 {} 秒 ≈ {} 分钟)",
+        timeout_timestamp - current_timestamp,
+        (timeout_timestamp - current_timestamp) / 60
     );
 
     // 4. Build Spillman Lock script
@@ -314,9 +347,9 @@ pub async fn execute_v2(
         user_address: user_address.to_string(),
         merchant_address: merchant_address.unwrap_or(&config.merchant.address).to_string(),
         capacity_ckb: capacity,
-        timeout_epochs,
-        current_epoch: current_timestamp,  // Now storing timestamp instead of epoch
-        timeout_epoch: timeout_timestamp,  // Now storing timestamp instead of epoch
+        timeout_epochs: 0, // Deprecated, keeping for backwards compatibility
+        current_timestamp,
+        timeout_timestamp,
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
