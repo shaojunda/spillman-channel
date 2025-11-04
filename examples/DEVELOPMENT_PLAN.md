@@ -394,8 +394,8 @@ struct SpillmanWitness {
 
 
 ### 未来功能
-- [ ] 支持商户多签地址签名
-  - [ ] funding
+- [x] 支持商户多签地址签名
+  - [x] funding (co-funding 模式)
   - [ ] refund
   - [ ] settle
 - [ ] **xUDT 通道支持**：支持用户自定义代币（xUDT）的支付通道
