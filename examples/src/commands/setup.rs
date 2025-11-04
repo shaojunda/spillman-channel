@@ -30,6 +30,7 @@ pub async fn execute(
     capacity: Option<u64>,
     timeout_timestamp: Option<u64>,
     co_fund: bool,
+    broadcast: bool,
 ) -> Result<()> {
     println!("🚀 执行 set-up 命令 - 准备 Spillman Channel");
     println!("==========================================\n");
@@ -208,6 +209,7 @@ pub async fn execute_v2(
     capacity: Option<u64>,
     timeout_timestamp: Option<u64>,
     co_fund: bool,
+    broadcast: bool,
 ) -> Result<()> {
     println!("🚀 执行 set-up 命令 - 准备 Spillman Channel (v2)");
     println!("==========================================\n");
@@ -361,21 +363,53 @@ pub async fn execute_v2(
     fs::write(&channel_info_path, channel_info_json)?;
     println!("✓ 通道信息已保存到: {}", channel_info_path.display());
 
-    // 7. Build refund transaction template
-    println!("\n📝 构建 Refund Transaction 模板...");
-    println!("⚠️  Refund transaction 模板待实现");
-    // TODO: build_refund_template(&config, &spillman_lock_script, capacity, timeout_timestamp)?;
+    // 7. Broadcast funding transaction (optional)
+    if broadcast {
+        println!("\n📡 广播 Funding Transaction 到链上...");
 
-    println!("\n✅ set-up 命令执行完成 (v2)");
-    println!("\n📌 下一步操作:");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("\n1️⃣  查看生成的文件:");
-    println!("   - 已签名交易: {}", funding_tx_path.display());
-    println!("   - 通道信息: {}", channel_info_path.display());
-    println!("\n2️⃣  广播 funding transaction:");
-    println!("   ckb-cli tx send --tx-file {}", funding_tx_path.display());
-    println!("\n3️⃣  交易上链后即可开始使用:");
-    println!("   spillman-cli pay --amount <CKB数量>");
+        // Load the saved transaction (TransactionView with hash)
+        let funding_tx_json_str = fs::read_to_string(&funding_tx_path)?;
+        let funding_tx_json: ckb_jsonrpc_types::TransactionView = serde_json::from_str(&funding_tx_json_str)?;
+
+        // Send transaction via RPC (use inner Transaction without hash)
+        let rpc_client = ckb_sdk::rpc::CkbRpcClient::new(&config.network.rpc_url);
+        let broadcast_tx_hash = rpc_client
+            .send_transaction(funding_tx_json.inner, None)
+            .map_err(|e| anyhow!("Failed to broadcast transaction: {:?}", e))?;
+
+        println!("✓ Funding Transaction 已广播");
+        println!("  - TX Hash: {:#x}", broadcast_tx_hash);
+
+        // 8. Build refund transaction template
+        println!("\n📝 构建 Refund Transaction 模板...");
+        println!("⚠️  Refund transaction 模板待实现");
+        // TODO: build_refund_template(&config, &spillman_lock_script, capacity, timeout_timestamp)?;
+
+        println!("\n✅ 通道创建成功 (v2)");
+        println!("\n📌 下一步操作:");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("\n🔍 查询交易状态:");
+        println!("   ckb-cli rpc get_transaction --hash {:#x}", broadcast_tx_hash);
+        println!("\n⏳ 等待交易上链确认...");
+        println!("   交易确认后即可开始支付");
+        println!("\n💸 创建支付:");
+        println!("   spillman-cli pay --amount <CKB数量> --channel-file {}", channel_info_path.display());
+    } else {
+        // 8. Build refund transaction template
+        println!("\n📝 构建 Refund Transaction 模板...");
+        println!("⚠️  Refund transaction 模板待实现");
+        // TODO: build_refund_template(&config, &spillman_lock_script, capacity, timeout_timestamp)?;
+
+        println!("\n✅ 通道创建成功 (v2) - 交易未广播");
+        println!("\n📌 下一步操作:");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("\n📄 生成的文件:");
+        println!("   - 已签名交易: {}", funding_tx_path.display());
+        println!("   - 通道信息: {}", channel_info_path.display());
+        println!("\n📡 手动广播交易:");
+        println!("   spillman-cli set-up --use-v2 --broadcast ... (重新运行带 --broadcast)");
+        println!("   或者使用其他工具手动发送交易");
+    }
 
     Ok(())
 }

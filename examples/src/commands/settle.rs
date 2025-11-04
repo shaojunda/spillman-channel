@@ -21,6 +21,7 @@ const SIGNATURE_SIZE: usize = 65;
 pub async fn execute(
     tx_file: &str,
     config_path: &str,
+    broadcast: bool,
 ) -> Result<()> {
     println!("\n═══════════════════════════════════════════════════════");
     println!("  🏦 商户结算 Commitment Transaction");
@@ -105,28 +106,50 @@ pub async fn execute(
     println!("✓ 交易签名更新完成");
     println!("  - New TX Hash: {:#x}", signed_tx_hash);
 
-    // 7. Broadcast transaction
-    println!("\n📡 广播交易到链上...");
-    let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
+    // 7. Broadcast transaction (optional)
+    if broadcast {
+        println!("\n📡 广播交易到链上...");
+        let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
 
-    // Convert to JSON RPC format (standard SDK method)
-    let signed_tx_json = ckb_jsonrpc_types::TransactionView::from(signed_tx.clone());
+        // Convert to JSON RPC format (standard SDK method)
+        let signed_tx_json = ckb_jsonrpc_types::TransactionView::from(signed_tx.clone());
 
-    let tx_hash = rpc_client
-        .send_transaction(signed_tx_json.inner, None)
-        .map_err(|e| anyhow!("Failed to broadcast transaction: {:?}", e))?;
+        let tx_hash = rpc_client
+            .send_transaction(signed_tx_json.inner, None)
+            .map_err(|e| anyhow!("Failed to broadcast transaction: {:?}", e))?;
 
-    println!("✓ 交易已广播");
-    println!("  - TX Hash: {:#x}", tx_hash);
+        println!("✓ 交易已广播");
+        println!("  - TX Hash: {:#x}", tx_hash);
 
-    // 8. Success message
-    println!("\n✅ 结算成功！");
-    println!("\n📌 后续操作:");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("\n🔍 查询交易状态：");
-    println!("  ckb-cli rpc get_transaction --hash {:#x}", tx_hash);
-    println!("\n⏳ 等待交易上链确认...");
-    println!("  交易确认后，支付金额将到达商户地址");
+        // 8. Success message
+        println!("\n✅ 结算成功！");
+        println!("\n📌 后续操作:");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("\n🔍 查询交易状态：");
+        println!("  ckb-cli rpc get_transaction --hash {:#x}", tx_hash);
+        println!("\n⏳ 等待交易上链确认...");
+        println!("  交易确认后，支付金额将到达商户地址");
+    } else {
+        // Save signed transaction to file
+        println!("\n💾 保存已签名交易...");
+
+        let signed_tx_json = ckb_jsonrpc_types::TransactionView::from(signed_tx);
+        let output_path = tx_file.replace(".json", "_signed.json");
+
+        let json_str = serde_json::to_string_pretty(&signed_tx_json.inner)?;
+        fs::write(&output_path, json_str)?;
+
+        println!("✓ 已签名交易已保存到: {}", output_path);
+
+        // 8. Success message
+        println!("\n✅ 交易签名完成 - 未广播");
+        println!("\n📌 后续操作:");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("\n📄 已签名交易文件: {}", output_path);
+        println!("\n📡 手动广播交易:");
+        println!("  spillman-cli settle --tx-file {} --broadcast", tx_file);
+        println!("  或者使用其他工具手动发送交易");
+    }
 
     Ok(())
 }

@@ -46,6 +46,10 @@ enum Commands {
         /// 使用 funding_v2 实现（新版本）
         #[arg(long, default_value = "false")]
         use_v2: bool,
+
+        /// 是否自动广播交易到链上（默认不广播，需要明确指定）
+        #[arg(long)]
+        broadcast: bool,
     },
 
     /// 签名交易
@@ -87,6 +91,10 @@ enum Commands {
         /// 配置文件路径
         #[arg(long, default_value = "config.toml")]
         config: String,
+
+        /// 是否自动广播交易到链上（默认不广播，需要明确指定）
+        #[arg(long)]
+        broadcast: bool,
     },
 
     /// 用户退款（超时后）
@@ -118,6 +126,7 @@ async fn main() -> Result<()> {
             timeout_timestamp,
             co_fund,
             use_v2,
+            broadcast,
         } => {
             if use_v2 {
                 // Use v2 implementation (funding_v2)
@@ -128,6 +137,7 @@ async fn main() -> Result<()> {
                     capacity,
                     timeout_timestamp,
                     co_fund,
+                    broadcast,
                 )
                 .await?;
             } else {
@@ -139,6 +149,7 @@ async fn main() -> Result<()> {
                     capacity,
                     timeout_timestamp,
                     co_fund,
+                    broadcast,
                 )
                 .await?;
             }
@@ -160,8 +171,9 @@ async fn main() -> Result<()> {
         Commands::Settle {
             tx_file,
             config,
+            broadcast,
         } => {
-            commands::settle::execute(&tx_file, &config).await?;
+            commands::settle::execute(&tx_file, &config, broadcast).await?;
         }
         Commands::Refund {
             tx_file,

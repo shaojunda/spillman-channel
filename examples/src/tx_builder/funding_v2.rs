@@ -518,7 +518,7 @@ pub async fn build_funding_transaction(
     let fee = total_input.saturating_sub(total_output);
     println!("  - Fee: {} ({} shannon)", HumanCapacity::from(fee), fee);
 
-    // Save transaction
+    // Save transaction (with hash field for refund command to use)
     let tx_json = ckb_jsonrpc_types::TransactionView::from(tx);
     let json_str = serde_json::to_string_pretty(&tx_json)?;
 
@@ -685,7 +685,7 @@ pub async fn build_cofund_funding_transaction(
     println!("  - Expected capacity: {} ({} shannon)", HumanCapacity::from(expected_capacity), expected_capacity);
     assert_eq!(funding_cell_capacity, expected_capacity, "Funding cell capacity mismatch!");
 
-    // Save transaction
+    // Save transaction (with hash field for refund command to use)
     let tx_json = ckb_jsonrpc_types::TransactionView::from(tx);
     let json_str = serde_json::to_string_pretty(&tx_json)?;
 
