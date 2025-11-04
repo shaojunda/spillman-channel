@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use ckb_sdk::{constants::ONE_CKB, rpc::CkbRpcClient, Address};
 use ckb_types::{
-    core::TransactionView,
-    packed::Script,
+    core::{Capacity, TransactionView},
+    packed::{CellOutput, Script},
     prelude::*,
     H256,
 };
@@ -98,22 +98,7 @@ pub async fn execute(
     println!("  - Capacity: {} CKB", spillman_lock_capacity / ONE_CKB);
     println!("  - Script hash: {:#x}", spillman_lock_script.calc_script_hash());
 
-    // 4. Convert payment amount to shannons
-    let payment_amount_shannons = amount * ONE_CKB;
-
-    // Validate payment amount
-    if payment_amount_shannons >= spillman_lock_capacity {
-        return Err(anyhow!(
-            "支付金额 {} CKB 超过通道容量 {} CKB",
-            amount,
-            spillman_lock_capacity / ONE_CKB
-        ));
-    }
-
-    println!("\n💰 支付详情:");
-    println!("  - 支付给商户: {} CKB", amount);
-
-    // 5. Parse addresses
+    // 4. Parse addresses
     let user_address = Address::from_str(&channel_info.user_address)
         .map_err(|e| anyhow!("Invalid user address: {}", e))?;
     let merchant_address = Address::from_str(&channel_info.merchant_address)
@@ -122,7 +107,45 @@ pub async fn execute(
     let user_lock_script = Script::from(&user_address);
     let merchant_lock_script = Script::from(&merchant_address);
 
-    // 6. Build and save commitment transaction
+    // 5. Calculate merchant's minimum occupied capacity
+    let merchant_cell = CellOutput::new_builder()
+        .capacity(Capacity::shannons(0))
+        .lock(merchant_lock_script.clone())
+        .build();
+
+    let merchant_min_capacity = merchant_cell
+        .occupied_capacity(Capacity::bytes(0).unwrap())
+        .map_err(|e| anyhow!("Failed to calculate merchant minimum capacity: {:?}", e))?
+        .as_u64();
+
+    println!("\n💰 支付详情:");
+    println!("  - 商户最小占用容量: {} CKB ({} shannons)",
+        merchant_min_capacity / ONE_CKB, merchant_min_capacity);
+
+    // 6. Convert payment amount to shannons
+    let payment_amount_shannons = amount * ONE_CKB;
+
+    // Merchant receives: payment amount + minimum occupied capacity
+    let merchant_total_capacity = payment_amount_shannons + merchant_min_capacity;
+
+    // Validate payment amount
+    if merchant_total_capacity >= spillman_lock_capacity {
+        return Err(anyhow!(
+            "支付金额过大：商户将收到 {} CKB（{} 支付 + {} 最小占用），超过通道容量 {} CKB",
+            merchant_total_capacity / ONE_CKB,
+            payment_amount_shannons / ONE_CKB,
+            merchant_min_capacity / ONE_CKB,
+            spillman_lock_capacity / ONE_CKB
+        ));
+    }
+
+    println!("  - 用户支付金额: {} CKB", amount);
+    println!("  - 商户实际收到: {} CKB ({} 支付 + {} 最小占用)",
+        merchant_total_capacity / ONE_CKB,
+        payment_amount_shannons / ONE_CKB,
+        merchant_min_capacity / ONE_CKB);
+
+    // 7. Build and save commitment transaction
     let output_file = generate_tx_filename("commitment", Some(&format!("{}_ckb", amount)));
 
     let (_tx_hash, _tx) = build_commitment_transaction(
@@ -134,6 +157,7 @@ pub async fn execute(
         user_lock_script,
         merchant_lock_script,
         payment_amount_shannons,
+        merchant_min_capacity,
         &output_file,
     )?;
 

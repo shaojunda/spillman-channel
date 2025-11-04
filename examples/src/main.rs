@@ -84,10 +84,6 @@ enum Commands {
         #[arg(long)]
         tx_file: String,
 
-        /// 商户私钥文件路径
-        #[arg(long)]
-        privkey_path: String,
-
         /// 配置文件路径
         #[arg(long, default_value = "config.toml")]
         config: String,
@@ -163,10 +159,9 @@ async fn main() -> Result<()> {
         }
         Commands::Settle {
             tx_file,
-            privkey_path,
             config,
         } => {
-            commands::settle::execute(&tx_file, &privkey_path, &config).await?;
+            commands::settle::execute(&tx_file, &config).await?;
         }
         Commands::Refund {
             tx_file,

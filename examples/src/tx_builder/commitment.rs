@@ -26,6 +26,7 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
+use ckb_sdk::constants::ONE_CKB;
 use ckb_types::{
     bytes::Bytes,
     core::{Capacity, DepType, TransactionView},
@@ -59,7 +60,8 @@ const UNLOCK_TYPE_COMMITMENT: u8 = 0x00;
 /// * `spillman_lock_script` - The Spillman Lock script
 /// * `user_lock_script` - User's lock script (for change output)
 /// * `merchant_lock_script` - Merchant's lock script (for payment output)
-/// * `payment_amount` - Amount to pay to merchant (in shannons)
+/// * `payment_amount` - Amount to pay to merchant (in shannons, excluding minimum occupied capacity)
+/// * `merchant_min_capacity` - Merchant cell's minimum occupied capacity (in shannons)
 /// * `output_path` - Path to save the transaction JSON
 pub fn build_commitment_transaction(
     config: &Config,
@@ -70,6 +72,7 @@ pub fn build_commitment_transaction(
     user_lock_script: Script,
     merchant_lock_script: Script,
     payment_amount: u64,
+    merchant_min_capacity: u64,
     output_path: &str,
 ) -> Result<(H256, TransactionView)> {
     println!("📝 构建 Commitment 交易...");
@@ -113,6 +116,7 @@ pub fn build_commitment_transaction(
         user_lock_script,
         merchant_lock_script,
         payment_amount,
+        merchant_min_capacity,
         spillman_lock_dep,
         auth_dep,
         &user_privkey,
@@ -121,10 +125,17 @@ pub fn build_commitment_transaction(
     let tx_hash = tx.hash();
 
     // Print summary
+    let merchant_total_capacity = payment_amount + merchant_min_capacity;
+    let fee_estimate = 1000u64;
+    let change_amount = spillman_lock_capacity - merchant_total_capacity - fee_estimate;
+
     println!("✓ Commitment transaction built");
     println!("  - Transaction hash: {:#x}", tx_hash);
-    println!("  - Payment to merchant: {} CKB", payment_amount / 100_000_000);
-    println!("  - Change to user: {} CKB", (spillman_lock_capacity - payment_amount - 1000) / 100_000_000);
+    println!("  - Payment to merchant: {} CKB (payment) + {} CKB (min capacity) = {} CKB",
+        payment_amount / ONE_CKB,
+        merchant_min_capacity / ONE_CKB,
+        merchant_total_capacity / ONE_CKB);
+    println!("  - Change to user: {} CKB", change_amount / ONE_CKB);
     println!("  - Estimated fee: 0.00001 CKB");
 
     // Save transaction
@@ -150,20 +161,24 @@ fn build_commitment_transaction_internal(
     user_lock_script: Script,
     merchant_lock_script: Script,
     payment_amount: u64,
+    merchant_min_capacity: u64,
     spillman_lock_dep: CellDep,
     auth_dep: CellDep,
     user_privkey: &Privkey,
 ) -> Result<TransactionView> {
-    // Calculate change amount (capacity - payment - fee estimate)
+    // Calculate merchant's total capacity (payment + minimum occupied capacity)
+    let merchant_total_capacity = payment_amount + merchant_min_capacity;
+
+    // Calculate change amount (spillman_capacity - merchant_total - fee estimate)
     let fee_estimate = 1000u64; // 0.00001 CKB
     let change_amount = spillman_lock_capacity
-        .checked_sub(payment_amount)
+        .checked_sub(merchant_total_capacity)
         .and_then(|v| v.checked_sub(fee_estimate))
         .ok_or_else(|| anyhow!(
-            "Insufficient capacity: need {} + {} CKB, have {} CKB",
-            payment_amount / 100_000_000,
-            fee_estimate / 100_000_000,
-            spillman_lock_capacity / 100_000_000
+            "Insufficient capacity: need {} (merchant) + {} (fee) CKB, have {} CKB",
+            merchant_total_capacity / ONE_CKB,
+            fee_estimate / ONE_CKB,
+            spillman_lock_capacity / ONE_CKB
         ))?;
 
     // Build inputs: Spillman Lock cell
@@ -179,10 +194,10 @@ fn build_commitment_transaction_internal(
         .capacity(Capacity::shannons(change_amount).pack())
         .build();
 
-    // Output 1: Merchant's address (payment)
+    // Output 1: Merchant's address (payment + minimum occupied capacity)
     let merchant_output = CellOutput::new_builder()
         .lock(merchant_lock_script)
-        .capacity(Capacity::shannons(payment_amount).pack())
+        .capacity(Capacity::shannons(merchant_total_capacity).pack())
         .build();
 
     // Build witness with placeholder signatures (will be replaced after signing)
