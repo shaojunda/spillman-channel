@@ -24,7 +24,7 @@
 │ 1. 用户构造退款交易（Refund Transaction）              │
 │    - Input: 未来的通道 cell（尚不存在）                │
 │    - Output: 用户地址（全额）                           │
-│    - Since: timeout_epoch（时间锁）                     │
+│    - Since: timeout_timestamp（时间锁，Unix 秒）       │
 │                                                          │
 │ 2. 商户为退款交易签名（保险机制）                       │
 │    - 确保用户不会永久失去资金                           │
@@ -70,7 +70,7 @@
 │   4. 商户获得 500 CKB，用户获得 500 CKB                │
 │                                                          │
 │ 选项 B: 用户退款（商户不结算）                          │
-│   1. 等待 timeout_epoch 到期                            │
+│   1. 等待 timeout_timestamp 到期                        │
 │   2. 用户广播退款交易（商户已预签名）                   │
 │   3. 用户获得全部 1000 CKB                              │
 │   4. 商户什么都得不到（损失全部收入）                   │
@@ -94,7 +94,7 @@
 struct SpillmanLockArgs {
     merchant_lock_arg: [u8; 20],     // 0..20:  商户锁地址参数 (Blake2b-160) - 查询前缀
     user_pubkey_hash: [u8; 20],      // 20..40: 用户公钥哈希 (Blake2b-160)
-    timeout_epoch: [u8; 8],          // 40..48: 超时 epoch (u64 小端序)
+    timeout_timestamp: [u8; 8],      // 40..48: 超时时间戳 (u64 小端序, Unix timestamp 秒)
     algorithm_id: u8,                // 48:     商户签名算法 ID
     version: u8,                     // 49:     合约版本号
 }
@@ -107,7 +107,7 @@ struct SpillmanLockArgs {
   - **单签（algorithm_id=0）**：`blake160(merchant_pubkey)`
   - **多签（algorithm_id=6）**：`blake160(multisig_config)`，其中 multisig_config 格式为 `S | R | M | N | PubKeyHash1 | PubKeyHash2 | ...`
 - `user_pubkey_hash`: 用户的公钥哈希（20 bytes，Blake2b-160）
-- `timeout_epoch`: 超时 epoch，**u64 小端序**，使用 CKB 的 Since 格式
+- `timeout_timestamp`: 超时时间戳，**u64 小端序**，Unix timestamp 秒格式，使用 CKB 的 Since 字段传递
 - `algorithm_id`: 商户签名算法 ID
   - `0`: CKB 单签（secp256k1_blake160_sighash_all）
   - `6`: CKB 多签（secp256k1_blake160_multisig_all）
@@ -125,7 +125,8 @@ struct SpillmanLockArgs {
    - 用户可以通过扫描商户前缀来过滤自己的通道
 
 **字节序说明**：
-- `timeout_epoch` 使用**小端序** (little-endian)，与 CKB Transaction 的 Since 字段保持一致
+- `timeout_timestamp` 使用**小端序** (little-endian)，与 CKB Transaction 的 Since 字段保持一致
+- 时间戳格式为 Unix timestamp 秒级（seconds since Unix epoch）
 
 **多签配置格式（multisig_config）**：
 
@@ -338,12 +339,12 @@ Spillman Lock = 2-of-2 多签 Lock Script
 
 **谁可以解锁**：用户
 
-**何时可以解锁**：超时后（current_epoch >= timeout_epoch）
+**何时可以解锁**：超时后（current_timestamp >= timeout_timestamp）
 
 **需要什么**：
 1. 用户的签名
 2. 商户的签名（创建时预签名）
-3. 当前时间 >= timeout_epoch
+3. 当前时间戳 >= timeout_timestamp
 
 **验证内容**：
 1. ✅ 超时验证（确保在超时后）
@@ -538,11 +539,11 @@ Spillman Lock = 2-of-2 多签 Lock Script
 
 ```
 建议配置:
-通道有效期: 144 epochs (~24 天)
-安全边界: 12 epochs (~2 天)
+通道有效期: 24 天 (2,073,600 秒)
+安全边界: 2 天 (172,800 秒)
 
 要求:
-- 商户应在超时前至少 12 epochs 结算
+- 商户应在超时前至少 2 天结算
 - 给商户足够时间上链（防止网络拥堵）
 ```
 
@@ -679,11 +680,11 @@ Script {
 
 ---
 
-**文档版本**: v1.1
+**文档版本**: v1.2
 
 **创建时间**: 2025-10-28
 
-**最后更新**: 2025-10-30（添加多签支持）
+**最后更新**: 2025-11-04（时间锁从 Epoch 格式改为 Timestamp 格式）
 
 **参考文档**:
 - [Bitcoin Wiki Example 7 vs Spillman](./bitcoin-wiki-example7-vs-spillman.md)
