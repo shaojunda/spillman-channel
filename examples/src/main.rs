@@ -65,9 +65,9 @@ enum Commands {
 
     /// 创建链下支付（commitment transaction）
     Pay {
-        /// 支付金额（CKB）
+        /// 支付金额（支持小数，如 "100" 或 "100.5" CKB）
         #[arg(long)]
-        amount: u64,
+        amount: String,
 
         /// 通道信息文件路径（包含 Spillman Lock cell 信息）
         #[arg(long, default_value = "secrets/channel_info.json")]
