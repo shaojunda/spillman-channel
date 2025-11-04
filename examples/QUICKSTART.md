@@ -1,69 +1,69 @@
-# Spillman Channel Full Flow Example - Quick Start
+# Spillman Channel CLI Tool - Quick Start Guide
 
-A complete demonstration of the Spillman Channel workflow, from channel creation to settlement.
+A complete command-line interface for managing Spillman one-way payment channels on CKB.
 
-## 🎯 Features
+## 🎯 Overview
 
-This example implements the three phases of Spillman Channel:
+The Spillman Channel CLI implements a complete one-way payment channel workflow:
 
 1. **Phase 1: Channel Setup**
-   - User constructs refund transaction
-   - Merchant pre-signs refund transaction
-   - User broadcasts funding transaction, creating Spillman Lock cell
+   - Construct refund transaction (timeout path)
+   - Merchant pre-signs refund transaction (guarantees user can refund after timeout)
+   - Construct and broadcast funding transaction with Spillman Lock
 
 2. **Phase 2: Off-chain Payments**
-   - User creates multiple commitment transactions
-   - Each new commitment increases payment to merchant
+   - User generates commitment transactions
+   - Each commitment increases payment to merchant
    - All transactions off-chain, zero fees
 
 3. **Phase 3: Settlement**
-   - **Option A**: Merchant settles with latest commitment (normal case)
-   - **Option B**: User refunds after timeout (merchant didn't settle)
+   - **Option A:** Merchant settles with latest commitment (normal case)
+   - **Option B:** User broadcasts pre-signed refund after timeout
 
 ## 📋 Prerequisites
 
-### 1. Deploy Spillman Lock Contract
+### 1. Deployed Contract
 
-First, deploy the Spillman Lock contract to CKB Testnet:
+The Spillman Lock contract is already deployed on CKB Testnet:
 
-```bash
-# In project root directory
-cd /Users/shaojunda/apps/app5/spillman-channel
+```toml
+[spillman_lock]
+code_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
+hash_type = "type"
+tx_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
+index = 0
 
-# Build contract
-make build
-
-# Deploy to testnet (configure deployment/config.toml first)
-cd deployment
-# Follow deployment/README.md instructions
+[auth]
+tx_hash = "0x3f0fe5376b847b0c286184bb59d38765841e135d7d64f87b2bf7014c6316eee2"
+index = 0
 ```
 
-After successful deployment, you'll get the contract's `code_hash` and `tx_hash`.
+### 2. Test Accounts
 
-### 2. Prepare Test Accounts
+You need two accounts with CKB on testnet:
 
-You need two test accounts:
+- **User** (payer) - needs ~1100 CKB for channel + fees
+- **Merchant** (payee) - needs minimal balance for transactions
 
-- **User**: Payer, needs sufficient CKB balance
-- **Merchant**: Payee
+Get testnet CKB from: [CKB Testnet Faucet](https://faucet.nervos.org/)
 
-Get testnet CKB from:
-- [CKB Testnet Faucet](https://faucet.nervos.org/)
+### 3. Generate Keys
 
-### 3. Generate Private Keys and Addresses
-
-Use CKB CLI or other tools:
+Use `ckb-cli` to generate accounts:
 
 ```bash
-# Generate account with ckb-cli
+# Generate user account
+ckb-cli account new
+
+# Generate merchant account
 ckb-cli account new
 ```
 
-## 🚀 Usage Steps
+## 🚀 Quick Start
 
 ### Step 1: Configuration
 
-Copy the configuration template and fill in actual values:
+Copy the template and configure:
 
 ```bash
 cd examples
@@ -77,366 +77,520 @@ Edit `config.toml`:
 rpc_url = "https://testnet.ckb.dev"
 
 [user]
-# User's private key (remove 0x prefix)
+# User's private key (without 0x prefix)
 private_key = "your_user_private_key_here"
-# User's address
 address = "ckt1..."
 
 [merchant]
-# Merchant's private key (remove 0x prefix)
+# Merchant's private key (without 0x prefix)
 private_key = "your_merchant_private_key_here"
-# Merchant's address
 address = "ckt1..."
 
-[channel]
-# Channel capacity in CKB
-capacity_ckb = 1000
-# Timeout in epochs (144 epochs ≈ 24 days, 1 epoch ≈ 4 hours)
-timeout_epochs = 144
-# Transaction fee in shannon (1 CKB = 100000000 shannon)
-tx_fee_shannon = 100000000
-
 [spillman_lock]
-# Spillman Lock contract code hash (obtained after deployment)
-code_hash = "0x..."
-# Hash type: type/data/data1/data2
+code_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
 hash_type = "type"
-```
-
-### Step 2: Run Example
-
-```bash
-# In examples directory
-cargo run --bin full_flow
-```
-
-### Step 3: View Output
-
-The program will output complete flow information:
-
-```
-🚀 Spillman Channel Full Flow Example
-======================================
-
-📋 Loading configuration...
-✓ Configuration loaded
-✓ User pubkey: 02...
-✓ Merchant pubkey: 03...
-
-🔗 Connecting to CKB network...
-✓ Connected to https://testnet.ckb.dev
-✓ Current epoch: 12345
-✓ Timeout epoch: 12489 (+144 epochs)
-
-👤 User address: ckt1...
-🏪 Merchant address: ckt1...
-
-🔐 Building Spillman Lock script...
-✓ Spillman Lock script created
-
-📝 Phase 1: Channel Setup
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💰 Channel parameters:
-  Capacity: 1000 CKB
-  Fee: 1 CKB
-  Total required: 1001 CKB
-
-📦 Collecting user's cells...
-✓ Collected 2 cells with total capacity: 1500 CKB
-
-🔨 Step 1: Constructing refund transaction...
-✓ Refund transaction prepared (merchant pre-signed)
-
-📤 Step 2: Broadcasting funding transaction...
-Funding Transaction Structure:
-  Inputs:
-    [0] 0x1234...5678:0 - 1000 CKB
-  Outputs:
-    [0] Spillman Lock Cell - 1000 CKB
-    [1] User Change Cell - (remaining) CKB
-
-📝 Phase 2: Off-chain Payments (Commitment Transactions)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💳 Commitment Transaction #1
-  Input: Spillman Lock Cell - 1000 CKB
-  Outputs:
-    [0] User address - 900 CKB (change)
-    [1] Merchant address - 100 CKB (payment)
-  Witness: User signature ✓
-  Status: Signed by user, held by merchant (off-chain)
-
-💳 Commitment Transaction #2
-  Input: Spillman Lock Cell - 1000 CKB
-  Outputs:
-    [0] User address - 700 CKB (change)
-    [1] Merchant address - 300 CKB (payment)
-  Witness: User signature ✓
-  Status: Signed by user, held by merchant (off-chain)
-
-💳 Commitment Transaction #3
-  Input: Spillman Lock Cell - 1000 CKB
-  Outputs:
-    [0] User address - 500 CKB (change)
-    [1] Merchant address - 500 CKB (payment)
-  Witness: User signature ✓
-  Status: Signed by user, held by merchant (off-chain)
-
-✓ Merchant holds the latest commitment (500 CKB payment)
-
-📝 Phase 3: Settlement
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🏪 Option A: Merchant Settlement (Normal Case)
-  1. Merchant takes the latest commitment (500 CKB)
-  2. Merchant adds their signature
-  3. Merchant broadcasts to CKB network
-  Result:
-    - Merchant receives: 500 CKB
-    - User receives: 500 CKB (change)
-
-⏰ Option B: User Refund (Timeout Case)
-  Conditions:
-    - Current epoch >= timeout epoch (12489)
-    - Merchant did not settle
-  Steps:
-    1. User waits for timeout
-    2. User broadcasts pre-signed refund transaction
-    3. User adds their signature
-  Result:
-    - User receives: 1000 CKB (full refund)
-    - Merchant receives: 0 CKB (loses all income)
-
-📊 Summary
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✓ Channel capacity: 1000 CKB
-✓ Total payments made: 3 commitments
-✓ Final state: 500 CKB to merchant, 500 CKB to user
-✓ Timeout protection: 144 epochs
-
-🎉 Spillman Channel flow completed successfully!
-```
-
-## 📝 Code Structure
-
-```
-examples/
-├── config.toml.example      # Configuration template
-├── config.toml              # Actual configuration (create yourself)
-├── QUICKSTART.md            # This document
-└── src/
-    └── full_flow.rs         # Main program
-```
-
-### Core Modules
-
-`full_flow.rs` contains the following features:
-
-1. **Configuration Management**
-   - `load_config()`: Load configuration file
-   - `Config` struct: Store all configuration items
-
-2. **Key Handling**
-   - `parse_privkey()`: Parse private key
-   - `pubkey_hash()`: Calculate pubkey hash (Blake2b-160)
-
-3. **Spillman Lock**
-   - `SpillmanLockArgs`: Lock args structure (49 bytes)
-   - `build_spillman_lock_script()`: Build Lock script
-
-4. **RPC Interaction**
-   - `get_current_epoch()`: Get current epoch
-   - `collect_user_cells()`: Collect user's live cells
-
-5. **Transaction Construction**
-   - Funding transaction
-   - Refund transaction
-   - Commitment transactions
-
-## 🔍 Key Concepts
-
-### Spillman Lock Args (49 bytes)
-
-```rust
-struct SpillmanLockArgs {
-    merchant_pubkey_hash: [u8; 20],  // Merchant pubkey hash (Blake2b-160)
-    user_pubkey_hash: [u8; 20],      // User pubkey hash (Blake2b-160)
-    timeout_epoch: u64,              // Timeout epoch (little-endian)
-    version: u8,                     // Version number
-}
-```
-
-### Two Unlock Paths
-
-1. **Commitment Path**
-   - Unlocker: Merchant
-   - Time: Anytime (before timeout)
-   - Signatures: User signature + Merchant signature
-   - Outputs: Output 0 to user (change), Output 1 to merchant (payment)
-
-2. **Timeout Path**
-   - Unlocker: User
-   - Time: After timeout
-   - Signatures: User signature + Merchant signature (pre-signed)
-   - Outputs: Output 0 to user (full refund)
-
-## ⚠️ Important Notes
-
-### Current Implementation Status
-
-This example is currently a **workflow demonstration** version, showcasing the complete Spillman Channel workflow and data structures.
-
-**Completed:**
-1. ✅ Configuration management with deployed contract info
-2. ✅ Key handling and cryptography
-3. ✅ Spillman Lock script construction (49-byte args)
-4. ✅ RPC connection and epoch queries
-5. ✅ Flow visualization
-
-**To Implement for Production:**
-6. ⚠️ Cell collection using DefaultCellCollector
-7. ⚠️ Transaction building using CapacityTransferBuilder
-8. ⚠️ Transaction signing with SecpCkbRawKeySigner
-9. ⚠️ Broadcasting with send_transaction RPC
-
-## 🛠️ Full Implementation Guide
-
-To implement real transactions, use **ckb-sdk-rust** components. The contract is already deployed to testnet with these parameters:
-
-```toml
-[spillman_lock]
-code_hash = "0x41fa54ee27a517db245b014116fe2baff1dcb639d42fc14be43c315ea3cef9f2"
-hash_type = "type"
-tx_hash = "0x3f0fe5376b847b0c286184bb59d38765841e135d7d64f87b2bf7014c6316eee2"
-index = 1
+tx_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
+index = 0
 
 [auth]
 tx_hash = "0x3f0fe5376b847b0c286184bb59d38765841e135d7d64f87b2bf7014c6316eee2"
 index = 0
 ```
 
-### Step-by-Step Implementation
+### Step 2: Build the CLI
 
-#### 1. Cell Collection
-
-Use `DefaultCellCollector` to gather user's live cells:
-
-```rust
-use ckb_sdk::traits::{DefaultCellCollector, CellCollector};
-
-let cell_collector = DefaultCellCollector::new(&ckb_client);
-let cells = cell_collector.collect_live_cells(
-    &user_lock_script,
-    true,  // with_data
-)?;
+```bash
+cd examples
+cargo build --release
 ```
 
-#### 2. Build Funding Transaction
+The binary will be at `../target/release/spillman-cli`
 
-Use `CapacityTransferBuilder` to create the funding transaction:
+### Step 3: Create Channel (Set-up)
 
-```rust
-use ckb_sdk::tx_builder::transfer::CapacityTransferBuilder;
-
-let builder = CapacityTransferBuilder::new(vec![(
-    spillman_lock_script.clone(),
-    channel_capacity,
-)]);
+```bash
+# Create a 1000 CKB channel with 24-day timeout
+spillman-cli set-up --co-fund --use-v2
 ```
 
-#### 3. Balance and Sign
+**Output:**
+```
+═══════════════════════════════════════════════════════
+  🚀 创建 Spillman 支付通道
+═══════════════════════════════════════════════════════
 
-```rust
-use ckb_sdk::{
-    tx_builder::CapacityBalancer,
-    traits::{SecpCkbRawKeySigner, DefaultTransactionDependencyProvider},
-    unlock::SecpSighashUnlocker,
-};
+📋 加载配置...
+✓ 配置加载完成
 
-// Add balancer
-let balancer = CapacityBalancer::new_simple(
-    user_lock_script.clone(),
-    placeholder_witness,
-    fee_rate,
-);
+👤 用户地址: ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...
+🏪 商户地址: ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...
 
-// Sign
-let signer = SecpCkbRawKeySigner::new_with_secret_keys(vec![user_privkey]);
-let unlockers = vec![SecpSighashUnlocker::from(Box::new(signer) as Box<_>)];
+🔐 生成密钥和参数...
+✓ 用户公钥哈希: 0x0ab3eb4f27290496c3685a2af01585d7ddf61ceb
+✓ 商户公钥哈希: 0x4475cce6c406033c9141a5308e8672192153a358
 
-let tx = balancer.build_balanced(
-    &mut cell_collector,
-    &cell_dep_resolver,
-    &header_dep_resolver,
-    &tx_builder,
-    &unlockers,
-)?;
+⏰ 时间参数:
+  - 当前时间戳: 1736005200 (2025-01-04 12:00:00 UTC)
+  - 超时时间戳: 1738078800 (2025-01-28 12:00:00 UTC)
+  - 超时时长: 24 天 (2,073,600 秒)
+
+📝 构建 Spillman Lock Script...
+✓ Spillman Lock Script 已创建
+
+📝 Step 1: 构建 Refund Transaction (超时退款路径)...
+✓ Refund transaction built
+  - Inputs: 1 (Spillman Lock cell)
+  - Outputs: 1 (User refund)
+  - Mode: Single (1 output)
+
+🔐 Step 2: 商户和用户预签 Refund 交易...
+✓ Merchant signature added
+✓ User signature added
+✓ Refund transaction saved: secrets/refund_tx_1762228000.json
+  ⚠️  This guarantees user can refund after timeout!
+
+📝 Step 3: 构建 Funding Transaction...
+✓ Funding transaction built
+  - Transaction hash: 0x2e57d66cbc26e863afd7903b60ab789d0e98cd557f7f2a2b0c066b9b3ad8dd00
+  - Inputs: User's cells
+  - Outputs: [0] Spillman Lock (1000 CKB), [1] User change
+
+✓ Funding transaction saved: secrets/funding_tx_signed.json
+✓ Channel info saved: secrets/channel_info.json
+
+✅ 通道创建成功！
+
+📌 安全保证：
+  ✓ Refund 交易已由商户预签
+  ✓ 用户可在超时后取回全部资金
+  ✓ 现在可以安全地广播 Funding 交易
 ```
 
-#### 4. Broadcast
+### Step 4: Make Payments (Off-chain)
 
-```rust
-let json_tx: ckb_jsonrpc_types::Transaction = tx.data().into();
-let tx_hash = ckb_client.send_transaction(
-    json_tx.into(),
-    Some(json_types::OutputsValidator::Passthrough),
-)?;
+Create commitment transactions (off-chain, zero fees):
 
-println!("Transaction sent: {:?}", tx_hash);
+```bash
+# Payment 1: Pay 100 CKB to merchant
+spillman-cli pay \
+  --amount 100 \
+  --channel-file secrets/channel_info.json
+
+# Payment 2: Pay 200 CKB (cumulative)
+spillman-cli pay \
+  --amount 200 \
+  --channel-file secrets/channel_info.json \
+  --config config.toml
+
+# Payment 3: Pay 300 CKB (cumulative)
+spillman-cli pay \
+  --amount 300 \
+  --channel-file secrets/channel_info.json \
+  --config config.toml
 ```
 
-### Reference Examples
+**Output:**
+```
+═══════════════════════════════════════════════════════
+  💸 创建 Commitment Transaction (链下支付)
+═══════════════════════════════════════════════════════
 
-See complete working examples in ckb-sdk-rust:
-- [`transfer_from_sighash.rs`](https://github.com/nervosnetwork/ckb-sdk-rust/blob/master/examples/transfer_from_sighash.rs) - Basic transfer
-- [`send_ckb_example.rs`](https://github.com/nervosnetwork/ckb-sdk-rust/blob/master/examples/send_ckb_example.rs) - Complete flow
+📋 加载配置...
+✓ 配置加载完成
 
-### Additional Resources
+📂 加载通道信息...
+✓ 通道信息:
+  - 用户地址: ckt1...
+  - 商户地址: ckt1...
+  - 通道容量: 1000 CKB
+  - Funding TX: 0x2e57d66cbc...
+  - Output Index: 0
 
-- [CKB SDK Rust Documentation](https://github.com/nervosnetwork/ckb-sdk-rust)
-- [Transaction Structure](https://docs.nervos.org/docs/basics/concepts/transaction/)
-- [Cell Model](https://docs.nervos.org/docs/basics/concepts/cell-model/)
+🔍 从链上查询 Spillman Lock cell...
+✓ Spillman Lock cell 信息:
+  - Capacity: 1000 CKB
+  - Script hash: 0x...
 
-### Security Reminders
+💰 支付详情:
+  - 商户最小占用容量: 61 CKB (61 shannons)
+  - 用户支付金额: 100 CKB
+  - 商户实际收到: 161 CKB (100 支付 + 61 最小占用)
 
-- 🔐 **NEVER** use test private keys on mainnet
-- 🔐 **NEVER** commit config files with real private keys to Git
-- 🔐 Use `.gitignore` to exclude `config.toml`
-- 💰 Use small amounts when testing on testnet
+📝 构建 Commitment 交易...
+✓ Commitment transaction built
+  - Transaction hash: 0x29e9d1acd72327b29de5bc3a5a6c6e446e2c482a11901eff924364a3d5b01fea
+  - Payment to merchant: 100 CKB (payment) + 61 CKB (min capacity) = 161 CKB
+  - Change to user: 838 CKB
+  - Estimated fee: 0.00001 CKB
 
-### Fee Explanation
+✓ Commitment transaction saved: secrets/commitment_100_ckb_1762228100.json
 
-- Funding: reserve fee as `capacity + fee`
-- Commitment/Refund: fee = Inputs - Outputs
-- Recommended fee: 0.001 - 1 CKB
+✅ Commitment Transaction 创建成功!
+```
+
+**Important:** Each new payment amount must be greater than the previous one!
+
+### Step 5A: Merchant Settlement (Normal Case)
+
+Merchant settles with the latest commitment:
+
+```bash
+spillman-cli settle \
+  --tx-file secrets/commitment_300_ckb_1762228200.json \
+  --config config.toml
+```
+
+**Output:**
+```
+═══════════════════════════════════════════════════════
+  🏦 商户结算 Commitment Transaction
+═══════════════════════════════════════════════════════
+
+📋 加载配置...
+✓ 配置加载完成
+
+🔑 加载商户私钥...
+✓ 商户私钥加载完成
+
+📄 加载 Commitment 交易: secrets/commitment_300_ckb_1762228200.json
+✓ 交易加载完成
+  - TX Hash: 0x29e9d1acd72327b29de5bc3a5a6c6e446e2c482a11901eff924364a3d5b01fea
+  - Inputs: 1
+  - Outputs: 2
+
+✓ Witness 结构验证通过
+
+🔐 商户签名交易...
+✓ 签名完成
+✓ 交易签名更新完成
+  - New TX Hash: 0x5f8e7d6c5b4a39281f0e9d8c7b6a59483f2e1d0c9b8a79685f4e3d2c1b0a9988
+
+📡 广播交易到链上...
+✓ 交易已广播
+  - TX Hash: 0x5f8e7d6c5b4a39281f0e9d8c7b6a59483f2e1d0c9b8a79685f4e3d2c1b0a9988
+
+✅ 结算成功！
+
+📌 后续操作:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 查询交易状态：
+  ckb-cli rpc get_transaction --hash 0x5f8e7d6c...
+
+⏳ 等待交易上链确认...
+  交易确认后，支付金额将到达商户地址
+```
+
+**Result:**
+- Merchant receives: 361 CKB (300 payment + 61 minimum capacity)
+- User receives: 638 CKB (change)
+- Channel closed ✓
+
+### Step 5B: User Refund (Timeout Case)
+
+If merchant doesn't settle, user can refund after timeout:
+
+```bash
+spillman-cli refund --tx-file /Users/shaojunda/apps/app5/spillman-channel-add-example/examples/secrets/funding_tx_signed.json --use-v2
+```
+
+**Output:**
+```
+📝 构建 Refund 交易...
+✓ Refund transaction built
+  - Transaction hash: 0x...
+  - Inputs count: 1
+  - Outputs count: 1
+  - Mode: Single (1 output)
+  - User refund: 999 CKB
+
+🔐 签名 Refund 交易 (Spillman Lock: Merchant + User)...
+✓ Refund transaction saved: output/refund_tx_v2.json
+
+✅ Transaction is signed and ready to broadcast after timeout
+```
+
+**Result:**
+- User receives: ~999 CKB (full refund minus fees)
+- Merchant receives: 0 CKB
+
+## 📊 Command Reference
+
+### `set-up` - Create Channel
+
+Creates a new payment channel with Spillman Lock.
+
+**⚠️ Critical Security Flow:**
+1. Constructs refund transaction (timeout path)
+2. Merchant pre-signs refund transaction
+3. User signs refund transaction
+4. Constructs and broadcasts funding transaction
+
+This order guarantees the user can always recover funds after timeout, even if merchant becomes uncooperative.
+
+```bash
+spillman-cli set-up \
+  --user-address <USER_ADDRESS> \
+  --merchant-address <MERCHANT_ADDRESS> \
+  --capacity-ckb <AMOUNT> \
+  --timeout-timestamp <SECONDS> \
+  --config <CONFIG_FILE> \
+  [--co-fund]
+```
+
+**Parameters:**
+- `--user-address`: User's CKB address
+- `--merchant-address`: Merchant's CKB address (optional, uses user address if omitted)
+- `--capacity-ckb`: Channel capacity in CKB
+- `--timeout-timestamp`: Timeout duration in seconds (e.g., 2073600 = 24 days)
+- `--config`: Path to config file (default: `config.toml`)
+- `--co-fund`: Enable co-funding mode (both parties contribute)
+
+**Outputs:**
+- `secrets/refund_tx_<timestamp>.json` - **Pre-signed refund transaction** (created first!)
+- `secrets/funding_tx_signed.json` - Signed funding transaction
+- `secrets/channel_info.json` - Channel metadata
+
+**Security Guarantee:**
+The refund transaction is constructed and fully signed (by both merchant and user) BEFORE the funding transaction is broadcast. This ensures:
+- ✅ User can always refund after timeout
+- ✅ Merchant cannot hold funds hostage
+- ✅ Trust-minimized channel setup
+
+### `pay` - Create Payment
+
+Creates a commitment transaction for off-chain payment.
+
+```bash
+spillman-cli pay \
+  --amount <CKB_AMOUNT> \
+  --channel-file <CHANNEL_INFO_FILE> \
+  --config <CONFIG_FILE>
+```
+
+**Parameters:**
+- `--amount`: Payment amount in CKB (must be greater than previous payments)
+- `--channel-file`: Path to channel info file (default: `secrets/channel_info.json`)
+- `--config`: Path to config file (default: `config.toml`)
+
+**Outputs:**
+- `secrets/commitment_<amount>_ckb_<timestamp>.json` - Signed commitment transaction
+
+**Notes:**
+- Payment is off-chain, zero fees
+- Each payment must exceed the previous amount
+- User signature is added automatically
+- Merchant adds signature during settlement
+
+### `settle` - Merchant Settlement
+
+Merchant settles a commitment transaction on-chain.
+
+```bash
+spillman-cli settle \
+  --tx-file <COMMITMENT_FILE> \
+  --config <CONFIG_FILE>
+```
+
+**Parameters:**
+- `--tx-file`: Path to commitment transaction file
+- `--config`: Path to config file (default: `config.toml`)
+
+**Notes:**
+- Adds merchant signature to commitment
+- Broadcasts transaction to CKB network
+- Closes the channel
+- Merchant receives payment + minimum capacity
+- User receives change
+
+### `refund` - User Refund
+
+User refunds channel funds after timeout.
+
+```bash
+spillman-cli refund \
+  --tx-file <FUNDING_TX_FILE> \
+  --config <CONFIG_FILE> \
+  --use-v2
+```
+
+**Parameters:**
+- `--tx-file`: Path to funding transaction file
+- `--config`: Path to config file (default: `config.toml`)
+- `--use-v2`: Use refund v2 builder (recommended)
+
+**Notes:**
+- Only works after timeout period
+- Uses pre-signed refund transaction from setup
+- Returns full channel capacity to user
+- Merchant loses all potential income
+
+## 🔍 Key Concepts
+
+### Spillman Lock Args (50 bytes)
+
+```
+[merchant_pubkey_hash: 20 bytes]  // Merchant's pubkey hash (Blake2b-160)
+[user_pubkey_hash: 20 bytes]      // User's pubkey hash (Blake2b-160)
+[timeout_timestamp: 8 bytes]      // Timeout in seconds (little-endian)
+[version: 2 bytes]                // Version (0x0100)
+```
+
+### Two Unlock Paths
+
+**1. Commitment Path (Payment)**
+- **Unlocker:** Merchant
+- **When:** Anytime before timeout
+- **Witness:** `[EMPTY_WITNESS_ARGS][0x00][merchant_sig][user_sig]`
+- **Outputs:**
+  - Output 0: User (change)
+  - Output 1: Merchant (payment + min capacity)
+
+**2. Timeout Path (Refund)**
+- **Unlocker:** User
+- **When:** After timeout
+- **Witness:** `[EMPTY_WITNESS_ARGS][0x01][merchant_sig_presigned][user_sig]`
+- **Outputs:**
+  - Output 0: User (full refund)
+
+### Minimum Occupied Capacity
+
+CKB requires each cell to have minimum capacity based on its size:
+
+```
+Minimum Capacity = Cell Size (bytes) × 1 CKB
+```
+
+For a typical lock script (~61 bytes):
+- Merchant receives: **Payment Amount + ~61 CKB**
+- User's change: **Channel Capacity - (Payment + Min Capacity) - Fee**
+
+**Example:**
+- Channel: 1000 CKB
+- Payment: 100 CKB
+- Merchant gets: 100 + 61 = **161 CKB**
+- User gets: 1000 - 161 - 0.00001 = **838.99999 CKB**
+
+### Timestamp Format
+
+The `timeout_timestamp` uses **seconds-level Unix timestamp** with CKB's "median of previous 37 blocks" rule:
+
+- Not a specific block timestamp
+- Calculated as median of previous 37 block headers
+- Prevents miner manipulation
+- More stable than individual block timestamps
+
+**Reference:** [CKB RFC-0017: Transaction Valid Since](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0017-tx-valid-since/0017-tx-valid-since.md)
+
+## 📁 Project Structure
+
+```
+examples/
+├── config.toml.example      # Configuration template
+├── config.toml              # Your configuration (gitignored)
+├── QUICKSTART.md            # This guide
+├── Cargo.toml               # Rust project manifest
+├── secrets/                 # Generated transactions (gitignored)
+│   ├── channel_info.json
+│   ├── funding_tx_signed.json
+│   ├── refund_tx_*.json
+│   └── commitment_*_ckb_*.json
+└── src/
+    ├── main.rs              # CLI entry point
+    ├── commands/            # Command implementations
+    │   ├── setup.rs         # Channel setup
+    │   ├── pay.rs           # Payment creation
+    │   ├── settle.rs        # Merchant settlement
+    │   └── refund.rs        # User refund
+    ├── tx_builder/          # Transaction builders
+    │   ├── funding_v2.rs    # Funding transaction
+    │   ├── commitment.rs    # Commitment transaction
+    │   └── refund_v2.rs     # Refund transaction
+    ├── storage/             # Transaction storage
+    │   └── tx_storage.rs
+    └── utils/               # Utilities
+        ├── config.rs        # Configuration loading
+        ├── crypto.rs        # Cryptography helpers
+        └── rpc.rs           # RPC helpers
+```
+
+## ⚠️ Important Notes
+
+### Security
+
+- 🔐 **NEVER** commit private keys to Git
+- 🔐 **NEVER** use test keys on mainnet
+- 🔐 Add `config.toml` and `secrets/` to `.gitignore`
+- 💰 Test with small amounts first
 
 ### Timeout Recommendations
 
-| Scenario | Timeout Epochs | Approximate | Description |
-|----------|---------------|-------------|-------------|
-| Testing | 10 | ~1.7 days | Quick testing |
-| Short-term | 72 | ~12 days | Short-term channel |
-| Standard | 144 | ~24 days | Recommended |
-| Long-term | 1008 | ~24 weeks | Long-term channel |
+| Use Case | Timeout (seconds) | Approximate | Description |
+|----------|------------------|-------------|-------------|
+| Testing | 86,400 | 1 day | Quick testing |
+| Short-term | 604,800 | 7 days | Week-long channel |
+| Standard | 2,073,600 | 24 days | Recommended |
+| Long-term | 7,776,000 | 90 days | Quarterly channel |
 
-⚠️ Epoch duration is approximately 4 hours, but varies with network conditions.
+### Transaction Fees
+
+- **Setup:** ~1 CKB (includes refund transaction)
+- **Payment:** 0 CKB (off-chain)
+- **Settlement:** ~0.00001 CKB
+- **Refund:** ~0.00001 CKB
+
+### Channel Capacity Planning
+
+Consider minimum occupied capacity when planning channel size:
+
+```
+Usable Capacity = Channel Capacity - Merchant Min Capacity - Fees
+```
+
+For 1000 CKB channel:
+- ~61 CKB reserved for merchant's minimum capacity
+- ~0.0001 CKB for fees
+- **~938.9999 CKB** available for payments
+
+## 🛠️ Troubleshooting
+
+### "Invalid funding tx hash: Invalid length"
+
+**Cause:** Transaction hash includes `0x` prefix
+
+**Solution:** The tool automatically handles `0x` prefix. Check your `channel_info.json` format.
+
+### "Merchant signature already present"
+
+**Cause:** Trying to settle an already-settled transaction
+
+**Solution:** Use a different commitment transaction or create a new channel.
+
+### "Timeout not reached"
+
+**Cause:** Trying to refund before timeout period
+
+**Solution:** Wait until current timestamp > timeout_timestamp.
+
+### "Insufficient capacity"
+
+**Cause:** Payment amount + minimum capacity exceeds channel capacity
+
+**Solution:**
+- Reduce payment amount, or
+- Create a larger channel
 
 ## 🔗 Resources
 
 - [Spillman Lock Design Document](../docs/spillman-lock-design.md)
-- [Bitcoin Wiki Example 7 vs Spillman](../docs/bitcoin-wiki-example7-vs-spillman.md)
+- [CKB Transaction Structure](https://docs.nervos.org/docs/basics/concepts/transaction/)
+- [CKB Cell Model](https://docs.nervos.org/docs/basics/concepts/cell-model/)
 - [CKB Testnet Faucet](https://faucet.nervos.org/)
 - [CKB Explorer (Testnet)](https://pudge.explorer.nervos.org/)
-- [CKB Developer Docs](https://docs.nervos.org/)
 
 ## 🤝 Contributing
 
 Issues and Pull Requests are welcome!
-
-For production-grade implementation, refer to:
-- [CKB SDK Examples](https://github.com/nervosnetwork/ckb-sdk-rust/tree/master/examples)
-- [CKB Transaction Builder](https://github.com/nervosnetwork/ckb-sdk-rust/blob/master/src/tx_builder/mod.rs)
 
 ## 📄 License
 
