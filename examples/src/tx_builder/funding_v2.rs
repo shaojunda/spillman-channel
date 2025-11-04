@@ -45,7 +45,7 @@
 
 use anyhow::{anyhow, Result};
 use ckb_sdk::{
-    constants::{ONE_CKB, SIGHASH_TYPE_HASH},
+    constants::{MultisigScript, ONE_CKB, SIGHASH_TYPE_HASH},
     rpc::CkbRpcClient,
     traits::{
         CellCollector, CellDepResolver, DefaultCellCollector,
@@ -53,19 +53,23 @@ use ckb_sdk::{
         HeaderDepResolver, SecpCkbRawKeySigner, TransactionDependencyProvider,
     },
     tx_builder::{unlock_tx, CapacityBalancer, TxBuilder, TxBuilderError},
-    unlock::{ScriptUnlocker, SecpSighashUnlocker},
+    unlock::{
+        MultisigConfig as SdkMultisigConfig, ScriptUnlocker, SecpMultisigUnlocker,
+        SecpSighashUnlocker,
+    },
     Address, HumanCapacity, ScriptId,
 };
 use ckb_types::{
-    core::{BlockView, Capacity, TransactionView},
+    core::{BlockView, Capacity, ScriptHashType, TransactionView},
     packed::{CellOutput, Script, Transaction, WitnessArgs},
     prelude::*,
-    H256,
+    H160, H256,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use crate::utils::config::Config;
+use ckb_hash::blake2b_256;
 
 /// Funding request parameters
 pub struct FundingRequest {
@@ -80,7 +84,10 @@ pub struct FundingRequest {
 /// Funding context (keys and RPC)
 #[derive(Clone)]
 pub struct FundingContext {
-    pub secret_key: secp256k1::SecretKey,
+    /// 所有私钥（单签时只有1个，多签时有多个）
+    pub secret_keys: Vec<secp256k1::SecretKey>,
+    /// 多签配置（可选，仅在多签时使用）- 使用 SDK 的 MultisigConfig
+    pub multisig_config: Option<SdkMultisigConfig>,
     pub rpc_url: String,
     pub funding_source_lock_script: Script,
 }
@@ -140,9 +147,19 @@ impl FundingTx {
         builder.build_internal(false).await
     }
 
-    /// Sign the funding transaction
-    pub async fn sign(mut self, secret_key: secp256k1::SecretKey, rpc_url: String) -> Result<Self> {
-        let signer = SecpCkbRawKeySigner::new_with_secret_keys(vec![secret_key]);
+    /// Sign the funding transaction (single key, for backward compatibility)
+    pub async fn sign(self, secret_key: secp256k1::SecretKey, rpc_url: String) -> Result<Self> {
+        self.sign_with_keys(vec![secret_key], None, rpc_url).await
+    }
+
+    /// Sign the funding transaction with multiple keys and optional multisig config
+    pub async fn sign_with_keys(
+        mut self,
+        secret_keys: Vec<secp256k1::SecretKey>,
+        _multisig_config: Option<SdkMultisigConfig>,
+        rpc_url: String,
+    ) -> Result<Self> {
+        let signer = SecpCkbRawKeySigner::new_with_secret_keys(secret_keys);
         let sighash_unlocker = SecpSighashUnlocker::from(Box::new(signer) as Box<_>);
         let sighash_script_id = ScriptId::new_type(SIGHASH_TYPE_HASH.clone());
         let mut unlockers = HashMap::default();
@@ -164,22 +181,45 @@ impl FundingTx {
     }
 
     /// Sign the funding transaction with multiple keys (for co-funding)
-    pub async fn sign_with_multiple_keys(mut self, secret_keys: Vec<secp256k1::SecretKey>, rpc_url: String) -> Result<Self> {
+    pub async fn sign_with_multiple_keys(
+        mut self,
+        secret_keys: Vec<secp256k1::SecretKey>,
+        multisig_config: Option<SdkMultisigConfig>,
+        rpc_url: String,
+    ) -> Result<Self> {
         let signer = SecpCkbRawKeySigner::new_with_secret_keys(secret_keys);
-        let sighash_unlocker = SecpSighashUnlocker::from(Box::new(signer) as Box<_>);
+
+        let mut unlockers: HashMap<ScriptId, Box<dyn ScriptUnlocker>> = HashMap::default();
+
+        // Always register SIGHASH unlocker (for user's single-sig inputs)
+        let sighash_unlocker = SecpSighashUnlocker::from(Box::new(signer.clone()) as Box<_>);
         let sighash_script_id = ScriptId::new_type(SIGHASH_TYPE_HASH.clone());
-        let mut unlockers = HashMap::default();
         unlockers.insert(
             sighash_script_id,
             Box::new(sighash_unlocker) as Box<dyn ScriptUnlocker>,
         );
+
+        // Register MULTISIG unlocker if merchant is using multisig
+        if let Some(config) = multisig_config {
+            // Use the SDK's MultisigConfig directly
+            let multisig_unlocker =
+                SecpMultisigUnlocker::from((Box::new(signer) as Box<_>, config));
+            let multisig_script_id = MultisigScript::V2.script_id();
+            unlockers.insert(
+                multisig_script_id,
+                Box::new(multisig_unlocker) as Box<dyn ScriptUnlocker>,
+            );
+        }
 
         let tx = self.take().ok_or_else(|| anyhow!("No transaction to sign"))?;
         let tx_dep_provider = DefaultTransactionDependencyProvider::new(&rpc_url, 10);
 
         let (tx, still_locked_groups) = unlock_tx(tx, &tx_dep_provider, &unlockers)?;
         if !still_locked_groups.is_empty() {
-            return Err(anyhow!("Some script groups are still locked: {:?}", still_locked_groups));
+            return Err(anyhow!(
+                "Some script groups are still locked: {:?}",
+                still_locked_groups
+            ));
         }
 
         self.update(tx);
@@ -300,8 +340,8 @@ impl FundingTxBuilder {
     /// # Arguments
     /// * `should_sign` - Whether to sign the transaction immediately
     async fn build_internal(self, should_sign: bool) -> Result<FundingTx> {
-        // Step 1: Create unlockers with the secret key from context
-        let signer = SecpCkbRawKeySigner::new_with_secret_keys(vec![self.context.secret_key.clone()]);
+        // Step 1: Create unlockers with the secret keys from context (user is always single-sig)
+        let signer = SecpCkbRawKeySigner::new_with_secret_keys(self.context.secret_keys.clone());
         let sighash_unlocker = SecpSighashUnlocker::from(Box::new(signer) as Box<_>);
         let sighash_script_id = ScriptId::new_type(SIGHASH_TYPE_HASH.clone());
         let mut unlockers = HashMap::default();
@@ -312,10 +352,16 @@ impl FundingTxBuilder {
 
         let sender = self.context.funding_source_lock_script.clone();
 
-        // Step 2: Create capacity balancer
-        let placeholder_witness = WitnessArgs::new_builder()
-            .lock(Some(molecule::bytes::Bytes::from(vec![0u8; 65])).pack())
-            .build();
+        // Step 2: Create capacity balancer with appropriate placeholder witness
+        let placeholder_witness = if let Some(ref config) = self.context.multisig_config {
+            // For multisig: use SDK's placeholder_witness() method
+            config.placeholder_witness()
+        } else {
+            // For single-sig: 65 bytes signature
+            WitnessArgs::new_builder()
+                .lock(Some(molecule::bytes::Bytes::from(vec![0u8; 65])).pack())
+                .build()
+        };
 
         let mut balancer = CapacityBalancer::new_simple(
             sender.clone(),
@@ -460,10 +506,15 @@ pub async fn build_funding_transaction(
         capacity_shannon
     );
 
-    // Parse user private key
-    let privkey_hex = config.user.private_key.trim_start_matches("0x");
-    let privkey_bytes = hex::decode(privkey_hex)?;
-    let secret_key = secp256k1::SecretKey::from_slice(&privkey_bytes)?;
+    // Parse user private keys
+    let secret_keys = config.user.get_secret_keys()?;
+
+    // Check if user is multisig and build multisig config if needed
+    let multisig_config = if let Some((threshold, total)) = config.user.get_multisig_config() {
+        Some(build_multisig_config(&secret_keys, threshold, total)?)
+    } else {
+        None
+    };
 
     // Create funding request (single-party funding, remote_amount = 0)
     let request = FundingRequest {
@@ -475,7 +526,8 @@ pub async fn build_funding_transaction(
     // Create funding context
     let user_lock = Script::from(user_address);
     let context = FundingContext {
-        secret_key: secret_key.clone(),
+        secret_keys,
+        multisig_config,
         rpc_url: config.network.rpc_url.clone(),
         funding_source_lock_script: user_lock,
     };
@@ -590,14 +642,22 @@ pub async fn build_cofund_funding_transaction(
     println!("  - User 需出资: {} + {} buffer", user_capacity, HumanCapacity::from(user_buffer_shannon));
     println!("  - Merchant 需出资: {} (最小占用)", HumanCapacity::from(merchant_capacity_shannon));
 
-    // Parse keys
-    let user_privkey_hex = config.user.private_key.trim_start_matches("0x");
-    let user_privkey_bytes = hex::decode(user_privkey_hex)?;
-    let user_secret_key = secp256k1::SecretKey::from_slice(&user_privkey_bytes)?;
+    // Parse keys for user and merchant
+    let user_secret_keys = config.user.get_secret_keys()?;
+    let merchant_secret_keys = config.merchant.get_secret_keys()?;
 
-    let merchant_privkey_hex = config.merchant.private_key.trim_start_matches("0x");
-    let merchant_privkey_bytes = hex::decode(merchant_privkey_hex)?;
-    let merchant_secret_key = secp256k1::SecretKey::from_slice(&merchant_privkey_bytes)?;
+    // Build multisig configs if needed
+    let user_multisig_config = if let Some((threshold, total)) = config.user.get_multisig_config() {
+        Some(build_multisig_config(&user_secret_keys, threshold, total)?)
+    } else {
+        None
+    };
+
+    let merchant_multisig_config = if let Some((threshold, total)) = config.merchant.get_multisig_config() {
+        Some(build_multisig_config(&merchant_secret_keys, threshold, total)?)
+    } else {
+        None
+    };
 
     // Step 1: User builds initial transaction (without signing)
     println!("\n📝 Step 1: User 构建初始交易（不签名）...");
@@ -609,7 +669,8 @@ pub async fn build_cofund_funding_transaction(
 
     let user_lock = Script::from(user_address);
     let user_context = FundingContext {
-        secret_key: user_secret_key.clone(),
+        secret_keys: user_secret_keys.clone(),
+        multisig_config: user_multisig_config.clone(),
         rpc_url: config.network.rpc_url.clone(),
         funding_source_lock_script: user_lock,
     };
@@ -629,7 +690,8 @@ pub async fn build_cofund_funding_transaction(
     };
 
     let merchant_context = FundingContext {
-        secret_key: merchant_secret_key.clone(),
+        secret_keys: merchant_secret_keys.clone(),
+        multisig_config: merchant_multisig_config,
         rpc_url: config.network.rpc_url.clone(),
         funding_source_lock_script: merchant_lock,
     };
@@ -640,10 +702,33 @@ pub async fn build_cofund_funding_transaction(
 
     println!("✓ Merchant 最小占用容量已添加");
 
-    // Step 3: Sign with both keys
+    // Note: Multisig cell dep is automatically added by SecpMultisigUnlocker during signing
+
+    // Step 3: Sign with both parties' keys
     println!("\n🔏 Step 3: 使用双方密钥签名交易...");
+
+    // For multisig, only include threshold number of merchant keys (not all)
+    let merchant_signing_keys: Vec<_> = if let Some(ref multisig_cfg) = merchant_context.multisig_config {
+        // Only take threshold number of keys for signing
+        merchant_secret_keys.iter()
+            .take(multisig_cfg.threshold() as usize)
+            .cloned()
+            .collect()
+    } else {
+        merchant_secret_keys.iter().cloned().collect()
+    };
+
+    let all_secret_keys: Vec<_> = user_secret_keys.iter()
+        .chain(merchant_signing_keys.iter())
+        .cloned()
+        .collect();
+
     let final_tx = combined_tx
-        .sign_with_multiple_keys(vec![user_secret_key, merchant_secret_key], merchant_context.rpc_url.clone())
+        .sign_with_multiple_keys(
+            all_secret_keys,
+            merchant_context.multisig_config.clone(),
+            merchant_context.rpc_url.clone(),
+        )
         .await?;
 
     let tx = final_tx.into_inner().ok_or_else(|| anyhow!("No transaction"))?;
@@ -751,4 +836,56 @@ mod tests {
         assert_eq!(HumanCapacity::from(12_300_000).to_string(), "0.123");
         assert_eq!(HumanCapacity::from(1).to_string(), "0.00000001");
     }
+}
+
+/// 构建多签配置的辅助函数
+///
+/// 根据私钥列表构建 SDK 的 MultisigConfig
+///
+/// # Arguments
+/// * `secret_keys` - 私钥列表（长度必须等于 total）
+/// * `threshold` - M: 需要多少个签名
+/// * `total` - N: 总共多少个公钥
+///
+/// # Returns
+/// * `SdkMultisigConfig` - SDK 的 MultisigConfig，可以直接调用 placeholder_witness() 等方法
+pub fn build_multisig_config(
+    secret_keys: &[secp256k1::SecretKey],
+    threshold: u8,
+    total: u8,
+) -> Result<SdkMultisigConfig> {
+    if secret_keys.len() != total as usize {
+        return Err(anyhow!(
+            "secret_keys length ({}) must equal total ({})",
+            secret_keys.len(),
+            total
+        ));
+    }
+
+    if threshold == 0 || threshold > total {
+        return Err(anyhow!(
+            "Invalid multisig config: threshold={}, total={}",
+            threshold,
+            total
+        ));
+    }
+
+    // 计算所有公钥的 hash160
+    let secp = secp256k1::Secp256k1::new();
+    let mut sighash_addresses = Vec::new();
+
+    for secret_key in secret_keys {
+        let pubkey = secp256k1::PublicKey::from_secret_key(&secp, secret_key);
+        let pubkey_bytes = pubkey.serialize();
+        let pubkey_hash = &blake2b_256(&pubkey_bytes)[0..20];
+        sighash_addresses.push(H160::from_slice(pubkey_hash)?);
+    }
+
+    // 使用 SDK 的 MultisigConfig::new_with 构建
+    Ok(SdkMultisigConfig::new_with(
+        MultisigScript::V2,
+        sighash_addresses,
+        0, // require_first_n: 0 means any M of N
+        threshold,
+    )?)
 }

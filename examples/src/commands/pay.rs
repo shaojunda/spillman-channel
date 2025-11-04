@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use ckb_sdk::{constants::ONE_CKB, rpc::CkbRpcClient, Address, HumanCapacity};
+use ckb_sdk::{rpc::CkbRpcClient, Address, HumanCapacity};
 use ckb_types::{
     core::{Capacity, TransactionView},
     packed::{CellOutput, Script},

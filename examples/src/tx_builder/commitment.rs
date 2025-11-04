@@ -78,7 +78,7 @@ pub fn build_commitment_transaction(
     println!("📝 构建 Commitment 交易...");
 
     // Parse user private key from config
-    let user_privkey = Privkey::from_str(&config.user.private_key)
+    let user_privkey = Privkey::from_str(config.user.private_key.as_ref().expect("User private_key is required"))
         .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
 
     // Build Spillman Lock outpoint

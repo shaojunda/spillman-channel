@@ -265,13 +265,13 @@ pub fn build_refund_transaction(
     // Parse private keys using ckb-crypto
     use crate::utils::crypto::pubkey_hash;
 
-    let user_privkey_hex = &config.user.private_key;
+    let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
     let user_privkey = Privkey::from_str(user_privkey_hex)
         .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
     let user_pubkey = user_privkey.pubkey().map_err(|e| anyhow!("Failed to get user pubkey: {:?}", e))?;
     let user_pubkey_hash_from_privkey = pubkey_hash(&user_pubkey);
 
-    let merchant_privkey_hex = &config.merchant.private_key;
+    let merchant_privkey_hex = config.merchant.private_key.as_ref().expect("Merchant private_key is required");
     let merchant_privkey = Privkey::from_str(merchant_privkey_hex)
         .map_err(|e| anyhow!("Failed to parse merchant private key: {:?}", e))?;
     let merchant_pubkey = merchant_privkey.pubkey().map_err(|e| anyhow!("Failed to get merchant pubkey: {:?}", e))?;

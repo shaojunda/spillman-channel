@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use ckb_sdk::rpc::CkbRpcClient;
 
 /// Get current epoch from CKB node

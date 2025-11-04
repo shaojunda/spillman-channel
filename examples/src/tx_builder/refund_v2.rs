@@ -549,9 +549,9 @@ pub async fn build_refund_transaction(
         .build();
 
     // Parse keys using ckb-crypto for Spillman Lock signing
-    let user_privkey = Privkey::from_str(&config.user.private_key)
+    let user_privkey = Privkey::from_str(config.user.private_key.as_ref().expect("User private_key is required"))
         .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
-    let merchant_privkey = Privkey::from_str(&config.merchant.private_key)
+    let merchant_privkey = Privkey::from_str(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))
         .map_err(|e| anyhow!("Failed to parse merchant private key: {:?}", e))?;
 
     // Extract Spillman Lock args from funding transaction
@@ -569,9 +569,12 @@ pub async fn build_refund_transaction(
     }
 
     // Create dummy keys for RefundContext (not used in v2)
-    let user_privkey_bytes = hex::decode(config.user.private_key.trim_start_matches("0x"))?;
+    let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
+    let user_privkey_bytes = hex::decode(user_privkey_hex.trim_start_matches("0x"))?;
     let user_secret_key = secp256k1::SecretKey::from_slice(&user_privkey_bytes)?;
-    let merchant_privkey_bytes = hex::decode(config.merchant.private_key.trim_start_matches("0x"))?;
+
+    let merchant_privkey_hex = config.merchant.private_key.as_ref().expect("Merchant private_key is required");
+    let merchant_privkey_bytes = hex::decode(merchant_privkey_hex.trim_start_matches("0x"))?;
     let merchant_secret_key = secp256k1::SecretKey::from_slice(&merchant_privkey_bytes)?;
 
     let request = RefundRequest {

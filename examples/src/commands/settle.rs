@@ -34,7 +34,7 @@ pub async fn execute(
 
     // 2. Parse merchant private key from config
     println!("\n🔑 加载商户私钥...");
-    let merchant_privkey = Privkey::from_str(&config.merchant.private_key)
+    let merchant_privkey = Privkey::from_str(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))
         .map_err(|e| anyhow!("Failed to parse merchant private key: {:?}", e))?;
     println!("✓ 商户私钥加载完成");
 

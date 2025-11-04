@@ -61,7 +61,7 @@ pub async fn build_funding_transaction(
 
     // Build ScriptUnlocker for signing
     // We need to re-parse the private key from the config
-    let privkey_hex = &config.user.private_key;
+    let privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
     let privkey_hex_trimmed = privkey_hex.trim_start_matches("0x");
     let privkey_bytes = hex::decode(privkey_hex_trimmed)
         .map_err(|e| anyhow!("failed to decode private key hex: {}", e))?;
@@ -183,14 +183,14 @@ pub async fn build_cofund_funding_transaction(
     let tx_dep_provider = DefaultTransactionDependencyProvider::new(&config.network.rpc_url, 10);
 
     // Parse private keys
-    let user_privkey_hex = &config.user.private_key;
+    let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
     let user_privkey_hex_trimmed = user_privkey_hex.trim_start_matches("0x");
     let user_privkey_bytes = hex::decode(user_privkey_hex_trimmed)
         .map_err(|e| anyhow!("failed to decode user private key hex: {}", e))?;
     let user_key = secp256k1::SecretKey::from_slice(&user_privkey_bytes)
         .map_err(|e| anyhow!("invalid user private key: {}", e))?;
 
-    let merchant_privkey_hex = &config.merchant.private_key;
+    let merchant_privkey_hex = config.merchant.private_key.as_ref().expect("Merchant private_key is required");
     let merchant_privkey_hex_trimmed = merchant_privkey_hex.trim_start_matches("0x");
     let merchant_privkey_bytes = hex::decode(merchant_privkey_hex_trimmed)
         .map_err(|e| anyhow!("failed to decode merchant private key hex: {}", e))?;

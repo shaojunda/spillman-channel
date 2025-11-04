@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use crate::tx_builder::funding::{build_cofund_funding_transaction, build_funding_transaction};
 use crate::tx_builder::funding_v2;
-use crate::tx_builder::spillman_lock::build_spillman_lock_script;
+use crate::tx_builder::spillman_lock::{build_spillman_lock_script, build_spillman_lock_script_with_hash};
 use crate::utils::config::load_config;
 use crate::utils::crypto::parse_privkey;
 
@@ -47,15 +47,47 @@ pub async fn execute(
 
     // 2. Parse user and merchant info
     println!("\n👤 解析用户和商户信息...");
-    let user_privkey = parse_privkey(&config.user.private_key)?;
-    let merchant_privkey = parse_privkey(&config.merchant.private_key)?;
 
+    // Parse user (must be single-sig for now)
+    let user_privkey = parse_privkey(config.user.private_key.as_ref().expect("User private_key is required"))?;
     let user_pubkey = user_privkey.pubkey()?;
-    let merchant_pubkey = merchant_privkey.pubkey()?;
 
     println!("✓ 用户地址: {}", user_address);
     println!("✓ 用户公钥: {}", hex::encode(user_pubkey.serialize()));
-    println!("✓ 商户公钥: {}", hex::encode(merchant_pubkey.serialize()));
+
+    // Parse merchant (can be single-sig or multisig)
+    let merchant_pubkey_hash = if config.merchant.is_multisig() {
+        // Multisig: use blake160(multisig_config) as lock arg
+        println!("✓ 商户模式: 多签 ({}-of-{})",
+            config.merchant.multisig_threshold.unwrap(),
+            config.merchant.multisig_total.unwrap()
+        );
+
+        let merchant_secret_keys = config.merchant.get_secret_keys()?;
+        let (threshold, total) = config.merchant.get_multisig_config()
+            .ok_or_else(|| anyhow!("Merchant multisig config is invalid"))?;
+
+        // Build multisig config
+        use crate::tx_builder::funding_v2::build_multisig_config;
+        let multisig_config = build_multisig_config(&merchant_secret_keys, threshold, total)?;
+
+        // Calculate blake160(multisig_config) for lock arg
+        use ckb_hash::blake2b_256;
+        let config_bytes = multisig_config.to_witness_data();
+        let multisig_lock_arg = &blake2b_256(&config_bytes)[0..20];
+
+        println!("✓ 商户多签 lock arg: {}", hex::encode(multisig_lock_arg));
+        multisig_lock_arg.to_vec()
+    } else {
+        // Single-sig: use pubkey_hash(merchant_pubkey)
+        println!("✓ 商户模式: 单签");
+        let merchant_privkey = parse_privkey(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))?;
+        let merchant_pubkey = merchant_privkey.pubkey()?;
+        println!("✓ 商户公钥: {}", hex::encode(merchant_pubkey.serialize()));
+
+        use crate::utils::crypto::pubkey_hash;
+        pubkey_hash(&merchant_pubkey).to_vec()
+    };
 
     if co_fund {
         println!("✓ 模式: Co-fund (User + Merchant 共同出资)");
@@ -106,10 +138,10 @@ pub async fn execute(
 
     // 4. Build Spillman Lock script
     println!("\n🔒 构建 Spillman Lock script...");
-    let spillman_lock_script = build_spillman_lock_script(
+    let spillman_lock_script = build_spillman_lock_script_with_hash(
         &config,
         &user_pubkey,
-        &merchant_pubkey,
+        &merchant_pubkey_hash,
         timeout_timestamp,
     )?;
 
@@ -226,15 +258,47 @@ pub async fn execute_v2(
 
     // 2. Parse user and merchant info
     println!("\n👤 解析用户和商户信息...");
-    let user_privkey = parse_privkey(&config.user.private_key)?;
-    let merchant_privkey = parse_privkey(&config.merchant.private_key)?;
 
+    // Parse user (must be single-sig for now)
+    let user_privkey = parse_privkey(config.user.private_key.as_ref().expect("User private_key is required"))?;
     let user_pubkey = user_privkey.pubkey()?;
-    let merchant_pubkey = merchant_privkey.pubkey()?;
 
     println!("✓ 用户地址: {}", user_address);
     println!("✓ 用户公钥: {}", hex::encode(user_pubkey.serialize()));
-    println!("✓ 商户公钥: {}", hex::encode(merchant_pubkey.serialize()));
+
+    // Parse merchant (can be single-sig or multisig)
+    let merchant_pubkey_hash = if config.merchant.is_multisig() {
+        // Multisig: use blake160(multisig_config) as lock arg
+        println!("✓ 商户模式: 多签 ({}-of-{})",
+            config.merchant.multisig_threshold.unwrap(),
+            config.merchant.multisig_total.unwrap()
+        );
+
+        let merchant_secret_keys = config.merchant.get_secret_keys()?;
+        let (threshold, total) = config.merchant.get_multisig_config()
+            .ok_or_else(|| anyhow!("Merchant multisig config is invalid"))?;
+
+        // Build multisig config
+        use crate::tx_builder::funding_v2::build_multisig_config;
+        let multisig_config = build_multisig_config(&merchant_secret_keys, threshold, total)?;
+
+        // Calculate blake160(multisig_config) for lock arg
+        use ckb_hash::blake2b_256;
+        let config_bytes = multisig_config.to_witness_data();
+        let multisig_lock_arg = &blake2b_256(&config_bytes)[0..20];
+
+        println!("✓ 商户多签 lock arg: {}", hex::encode(multisig_lock_arg));
+        multisig_lock_arg.to_vec()
+    } else {
+        // Single-sig: use pubkey_hash(merchant_pubkey)
+        println!("✓ 商户模式: 单签");
+        let merchant_privkey = parse_privkey(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))?;
+        let merchant_pubkey = merchant_privkey.pubkey()?;
+        println!("✓ 商户公钥: {}", hex::encode(merchant_pubkey.serialize()));
+
+        use crate::utils::crypto::pubkey_hash;
+        pubkey_hash(&merchant_pubkey).to_vec()
+    };
 
     if co_fund {
         println!("✓ 模式: Co-fund (User + Merchant 共同出资)");
@@ -285,10 +349,10 @@ pub async fn execute_v2(
 
     // 4. Build Spillman Lock script
     println!("\n🔒 构建 Spillman Lock script...");
-    let spillman_lock_script = build_spillman_lock_script(
+    let spillman_lock_script = build_spillman_lock_script_with_hash(
         &config,
         &user_pubkey,
-        &merchant_pubkey,
+        &merchant_pubkey_hash,
         timeout_timestamp,
     )?;
 
