@@ -28,9 +28,9 @@ The Spillman Lock contract is already deployed on CKB Testnet:
 
 ```toml
 [spillman_lock]
-code_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
+code_hash = "0x41fa54ee27a517db245b014116fe2baff1dcb639d42fc14be43c315ea3cef9f2"
 hash_type = "type"
-tx_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
+tx_hash = "0xb6fb2aac95bf235ae60f98c77541c27501003dcd0abf1f76d874ffe4ff051b27"
 index = 0
 
 [auth]
@@ -87,9 +87,9 @@ private_key = "your_merchant_private_key_here"
 address = "ckt1..."
 
 [spillman_lock]
-code_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
+code_hash = "0x41fa54ee27a517db245b014116fe2baff1dcb639d42fc14be43c315ea3cef9f2"
 hash_type = "type"
-tx_hash = "0x895a2daeaa274daadfd02b0976e5762e50bec04c4902b4f85fc99f7912cc1277"
+tx_hash = "0xb6fb2aac95bf235ae60f98c77541c27501003dcd0abf1f76d874ffe4ff051b27"
 index = 0
 
 [auth]
