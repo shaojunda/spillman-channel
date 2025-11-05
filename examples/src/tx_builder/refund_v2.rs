@@ -81,7 +81,30 @@ use crate::utils::crypto::pubkey_hash;
 // Constants for witness structure
 const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
 const UNLOCK_TYPE_TIMEOUT: u8 = 0x01;
-const REFUND_WITNESS_SIZE: usize = 147; // 16 + 1 + 65 + 65
+const REFUND_WITNESS_SIZE_SINGLE_SIG: usize = 147; // 16 + 1 + 65 + 65
+
+/// Calculate refund witness size based on merchant's signature type
+///
+/// # Arguments
+/// * `merchant_multisig_config` - Optional multisig config for merchant
+///
+/// # Returns
+/// Total witness size in bytes
+fn calculate_refund_witness_size(merchant_multisig_config: Option<&ckb_sdk::unlock::MultisigConfig>) -> usize {
+    let base_size = 16 + 1; // EMPTY_WITNESS_ARGS + UNLOCK_TYPE_TIMEOUT
+    let user_sig_size = 65; // User signature always 65 bytes
+
+    let merchant_sig_size = if let Some(config) = merchant_multisig_config {
+        // Multisig: config_data + threshold * 65 bytes signatures
+        let config_data = config.to_witness_data();
+        config_data.len() + (config.threshold() as usize) * 65
+    } else {
+        // Single-sig: 65 bytes signature
+        65
+    };
+
+    base_size + merchant_sig_size + user_sig_size
+}
 
 /// Refund request parameters
 #[derive(Clone)]
@@ -94,6 +117,8 @@ pub struct RefundRequest {
     pub user_lock_script: Script,
     /// Merchant's lock script (optional, for co-fund mode)
     pub merchant_lock_script: Option<Script>,
+    /// Fee rate in shannon/KB
+    pub fee_rate: u64,
 }
 
 /// Refund context (keys and RPC)
@@ -101,8 +126,12 @@ pub struct RefundRequest {
 pub struct RefundContext {
     #[allow(dead_code)]
     pub user_secret_key: secp256k1::SecretKey,
+    /// Merchant secret keys (single-sig: 1 key, multisig: multiple keys)
     #[allow(dead_code)]
-    pub merchant_secret_key: Option<secp256k1::SecretKey>,
+    pub merchant_secret_keys: Option<Vec<secp256k1::SecretKey>>,
+    /// Multisig configuration for merchant (if merchant uses multisig)
+    #[allow(dead_code)]
+    pub merchant_multisig_config: Option<ckb_sdk::unlock::MultisigConfig>,
     #[allow(dead_code)]
     pub rpc_url: String,
     pub spillman_lock_dep: CellDep,
@@ -156,31 +185,55 @@ impl RefundTx {
     /// Spillman Lock timeout path requires:
     /// - EMPTY_WITNESS_ARGS (16 bytes)
     /// - UNLOCK_TYPE_TIMEOUT (1 byte, 0x01)
-    /// - Merchant signature (65 bytes)
+    /// - Merchant signature (65 bytes for single-sig, or multisig config + M signatures for multisig)
     /// - User signature (65 bytes)
     pub fn sign_for_spillman_lock(
         mut self,
         user_privkey: &Privkey,
-        merchant_privkey: &Privkey,
+        merchant_secret_keys: &[secp256k1::SecretKey],
         spillman_lock_args: &[u8],
+        merchant_multisig_config: Option<&ckb_sdk::unlock::MultisigConfig>,
     ) -> Result<Self> {
         let tx = self.take().ok_or_else(|| anyhow!("No transaction to sign"))?;
 
         // Verify pubkey hashes match Spillman Lock args
         let user_pubkey = user_privkey.pubkey()
             .map_err(|e| anyhow!("Failed to get user pubkey: {:?}", e))?;
-        let merchant_pubkey = merchant_privkey.pubkey()
-            .map_err(|e| anyhow!("Failed to get merchant pubkey: {:?}", e))?;
 
         let user_pubkey_hash_from_privkey = pubkey_hash(&user_pubkey);
-        let merchant_pubkey_hash_from_privkey = pubkey_hash(&merchant_pubkey);
 
         let expected_merchant_hash = &spillman_lock_args[0..20];
         let expected_user_hash = &spillman_lock_args[20..40];
 
-        if merchant_pubkey_hash_from_privkey != expected_merchant_hash {
-            return Err(anyhow!("Merchant pubkey hash mismatch!"));
+        // Verify merchant hash (different logic for single-sig vs multisig)
+        if let Some(multisig_config) = merchant_multisig_config {
+            // For multisig: merchant_hash should be blake160(multisig_config_data)
+            use ckb_hash::blake2b_256;
+            let config_data = multisig_config.to_witness_data();
+            let hash = blake2b_256(&config_data);
+            let merchant_multisig_hash = &hash[0..20];
+            if merchant_multisig_hash != expected_merchant_hash {
+                return Err(anyhow!("Merchant multisig hash mismatch! Expected: {}, Got: {}",
+                    hex::encode(expected_merchant_hash),
+                    hex::encode(merchant_multisig_hash)
+                ));
+            }
+        } else {
+            // For single-sig: merchant_hash is blake160(pubkey)
+            if merchant_secret_keys.len() != 1 {
+                return Err(anyhow!("Single-sig merchant should have exactly 1 secret key"));
+            }
+            let secp = secp256k1::Secp256k1::new();
+            let merchant_pubkey_secp = secp256k1::PublicKey::from_secret_key(&secp, &merchant_secret_keys[0]);
+            let merchant_pubkey_bytes = merchant_pubkey_secp.serialize();
+            use ckb_hash::blake2b_256;
+            let merchant_pubkey_hash_from_privkey = &blake2b_256(&merchant_pubkey_bytes)[0..20];
+            if merchant_pubkey_hash_from_privkey != expected_merchant_hash {
+                return Err(anyhow!("Merchant pubkey hash mismatch!"));
+            }
         }
+
+        // Verify user hash (always single-sig)
         if user_pubkey_hash_from_privkey != expected_user_hash {
             return Err(anyhow!("User pubkey hash mismatch!"));
         }
@@ -188,25 +241,64 @@ impl RefundTx {
         // Compute signing message (raw tx without cell_deps)
         let signing_message = compute_signing_message(&tx);
 
-        // Sign with merchant key first, then user key
-        let merchant_sig = merchant_privkey
-            .sign_recoverable(&signing_message.into())
-            .map_err(|e| anyhow!("Failed to sign with merchant key: {:?}", e))?
-            .serialize();
+        // Build witness based on merchant signature type
+        let witness_data = if let Some(multisig_config) = merchant_multisig_config {
+            // Multisig merchant: collect threshold number of signatures
+            let threshold = multisig_config.threshold() as usize;
+            if merchant_secret_keys.len() < threshold {
+                return Err(anyhow!("Not enough merchant secret keys: need {}, got {}", threshold, merchant_secret_keys.len()));
+            }
 
-        let user_sig = user_privkey
-            .sign_recoverable(&signing_message.into())
-            .map_err(|e| anyhow!("Failed to sign with user key: {:?}", e))?
-            .serialize();
+            let mut merchant_signatures = Vec::new();
+            for key in merchant_secret_keys.iter().take(threshold) {
+                // Convert secp256k1::SecretKey to ckb_crypto::secp::Privkey
+                let privkey_bytes = key.secret_bytes();
+                let merchant_privkey = Privkey::from_slice(&privkey_bytes);
+                let signature = merchant_privkey
+                    .sign_recoverable(&signing_message.into())
+                    .map_err(|e| anyhow!("Failed to sign with merchant key: {:?}", e))?
+                    .serialize();
+                merchant_signatures.extend_from_slice(&signature);
+            }
 
-        // Build witness: EMPTY_WITNESS_ARGS + UNLOCK_TYPE_TIMEOUT + merchant_sig + user_sig
-        let witness_data = [
-            &EMPTY_WITNESS_ARGS[..],
-            &[UNLOCK_TYPE_TIMEOUT][..],
-            &merchant_sig[..],
-            &user_sig[..],
-        ]
-        .concat();
+            let user_sig = user_privkey
+                .sign_recoverable(&signing_message.into())
+                .map_err(|e| anyhow!("Failed to sign with user key: {:?}", e))?
+                .serialize();
+
+            // Multisig witness: empty_witness_args + unlock_type + multisig_config + merchant_signatures + user_signature
+            let config_data = multisig_config.to_witness_data();
+            [
+                &EMPTY_WITNESS_ARGS[..],
+                &[UNLOCK_TYPE_TIMEOUT][..],
+                &config_data[..],
+                &merchant_signatures[..],
+                &user_sig[..],
+            ]
+            .concat()
+        } else {
+            // Single-sig merchant
+            let privkey_bytes = merchant_secret_keys[0].secret_bytes();
+            let merchant_privkey = Privkey::from_slice(&privkey_bytes);
+            let merchant_sig = merchant_privkey
+                .sign_recoverable(&signing_message.into())
+                .map_err(|e| anyhow!("Failed to sign with merchant key: {:?}", e))?
+                .serialize();
+
+            let user_sig = user_privkey
+                .sign_recoverable(&signing_message.into())
+                .map_err(|e| anyhow!("Failed to sign with user key: {:?}", e))?
+                .serialize();
+
+            // Single-sig witness: empty_witness_args + unlock_type + merchant_sig + user_sig
+            [
+                &EMPTY_WITNESS_ARGS[..],
+                &[UNLOCK_TYPE_TIMEOUT][..],
+                &merchant_sig[..],
+                &user_sig[..],
+            ]
+            .concat()
+        };
 
         // Rebuild transaction with witness
         let signed_tx = tx
@@ -334,8 +426,9 @@ impl TxBuilder for RefundTxBuilder {
             outputs_data.push(Bytes::new().pack());
         }
 
-        // Build witness placeholder
-        let witness_placeholder = vec![0u8; REFUND_WITNESS_SIZE];
+        // Build witness placeholder (size depends on merchant's signature type)
+        let witness_size = calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
+        let witness_placeholder = vec![0u8; witness_size];
 
         let tx = Transaction::default()
             .as_advanced_builder()
@@ -377,7 +470,7 @@ impl RefundTxBuilder {
         };
 
         // Iteratively calculate fee
-        let fee_rate = 1000u64; // shannon per KB
+        let fee_rate = self.request.fee_rate; // Use parameter, default 1000 shannon/KB
         let max_iterations = 10;
         let mut current_fee = 0u64;
         let mut final_tx: Option<TransactionView> = None;
@@ -468,7 +561,8 @@ impl RefundTxBuilder {
             outputs_data.push(Bytes::new().pack());
         }
 
-        let witness_placeholder = vec![0u8; REFUND_WITNESS_SIZE];
+        let witness_size = calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
+        let witness_placeholder = vec![0u8; witness_size];
 
         let tx = Transaction::default()
             .as_advanced_builder()
@@ -520,6 +614,7 @@ pub async fn build_refund_transaction(
     funding_tx: &TransactionView,
     user_address: &Address,
     merchant_address: Option<&Address>,
+    fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, TransactionView)> {
     println!("📝 构建 Refund 交易...");
@@ -551,8 +646,32 @@ pub async fn build_refund_transaction(
     // Parse keys using ckb-crypto for Spillman Lock signing
     let user_privkey = Privkey::from_str(config.user.private_key.as_ref().expect("User private_key is required"))
         .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
-    let merchant_privkey = Privkey::from_str(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))
-        .map_err(|e| anyhow!("Failed to parse merchant private key: {:?}", e))?;
+
+    // Parse merchant keys and multisig config
+    let (merchant_privkeys, merchant_multisig_config) = if config.merchant.is_multisig() {
+        // Multisig merchant
+        let secret_keys = config.merchant.get_secret_keys()?;
+        let (threshold, total) = config.merchant.get_multisig_config()
+            .ok_or_else(|| anyhow!("Merchant multisig config is invalid"))?;
+
+        use crate::tx_builder::funding_v2::build_multisig_config;
+        let multisig_config = build_multisig_config(&secret_keys, threshold, total)?;
+
+        (Some(secret_keys), Some(multisig_config))
+    } else {
+        // Single-sig merchant
+        let merchant_privkey_str = config.merchant.private_key.as_ref()
+            .ok_or_else(|| anyhow!("Merchant private_key is required for single-sig"))?;
+        let merchant_secret_key = {
+            let key_hex = merchant_privkey_str.trim_start_matches("0x");
+            let key_bytes = hex::decode(key_hex)?;
+            secp256k1::SecretKey::from_slice(&key_bytes)?
+        };
+        (Some(vec![merchant_secret_key]), None)
+    };
+
+    // Clone merchant_privkeys for signing
+    let merchant_privkeys_for_sign = merchant_privkeys.clone();
 
     // Extract Spillman Lock args from funding transaction
     let spillman_cell = funding_tx
@@ -568,25 +687,26 @@ pub async fn build_refund_transaction(
         ));
     }
 
-    // Create dummy keys for RefundContext (not used in v2)
+    // Create user secret key for RefundContext
     let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
     let user_privkey_bytes = hex::decode(user_privkey_hex.trim_start_matches("0x"))?;
     let user_secret_key = secp256k1::SecretKey::from_slice(&user_privkey_bytes)?;
-
-    let merchant_privkey_hex = config.merchant.private_key.as_ref().expect("Merchant private_key is required");
-    let merchant_privkey_bytes = hex::decode(merchant_privkey_hex.trim_start_matches("0x"))?;
-    let merchant_secret_key = secp256k1::SecretKey::from_slice(&merchant_privkey_bytes)?;
 
     let request = RefundRequest {
         funding_tx_hash,
         funding_tx: funding_tx.clone(),
         user_lock_script,
         merchant_lock_script,
+        fee_rate,
     };
+
+    // Clone merchant_multisig_config for later use in signing
+    let merchant_multisig_config_for_sign = merchant_multisig_config.clone();
 
     let context = RefundContext {
         user_secret_key,
-        merchant_secret_key: Some(merchant_secret_key),
+        merchant_secret_keys: merchant_privkeys,
+        merchant_multisig_config,
         rpc_url: config.network.rpc_url.clone(),
         spillman_lock_dep: spillman_dep,
         auth_dep,
@@ -597,7 +717,12 @@ pub async fn build_refund_transaction(
 
     // Sign transaction with Spillman Lock witness structure
     println!("🔐 签名 Refund 交易 (Spillman Lock: Merchant + User)...");
-    let refund_tx = refund_tx.sign_for_spillman_lock(&user_privkey, &merchant_privkey, &args_bytes)?;
+    let refund_tx = refund_tx.sign_for_spillman_lock(
+        &user_privkey,
+        merchant_privkeys_for_sign.as_ref().unwrap(),
+        &args_bytes,
+        merchant_multisig_config_for_sign.as_ref(),
+    )?;
 
     let tx = refund_tx.into_inner().ok_or_else(|| anyhow!("No transaction"))?;
     let tx_hash = tx.hash();
@@ -649,7 +774,7 @@ mod tests {
 
         assert_eq!(
             empty_args_size + unlock_type_size + merchant_sig_size + user_sig_size,
-            REFUND_WITNESS_SIZE
+            REFUND_WITNESS_SIZE_SINGLE_SIG
         );
     }
 }

@@ -38,6 +38,7 @@ pub fn build_refund_transaction(
     user_lock_script: Script,
     merchant_lock_script: Option<Script>,
     _timeout_timestamp: u64,  // Not used - we read from Spillman Lock args
+    fee_rate: u64,
     output_path: &str,
 ) -> Result<TransactionView> {
     println!("  📋 构建 Refund 交易...");
@@ -86,7 +87,7 @@ pub fn build_refund_transaction(
     println!("    - Input since: 0x{:x}", timeout_since);
 
     // Setup fee calculator
-    let fee_rate = 1000u64; // shannon per KB
+    // Use parameter fee_rate (default 1000 shannon/KB)
     let fee_calculator = FeeCalculator::new(fee_rate);
 
     // Get Spillman Lock cell dep from config

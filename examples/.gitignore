@@ -5,3 +5,8 @@ config.toml
 
 secrets/
 src/.DS_Store
+
+# Ignore all markdown files except specific ones
+*.md
+!DEVELOPMENT_PLAN.md
+!IMPLEMENTATION_STATUS.md

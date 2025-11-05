@@ -39,6 +39,7 @@ pub async fn build_funding_transaction(
     user_address: &Address,
     spillman_lock_script: &Script,
     capacity_ckb: u64,
+    fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, u32)> {
     let capacity_shannon = capacity_ckb * 100_000_000;
@@ -142,6 +143,7 @@ pub async fn build_cofund_funding_transaction(
     merchant_address: &Address,
     user_capacity_ckb: u64,
     spillman_lock_script: &Script,
+    fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, u32)> {
     use ckb_types::{
@@ -299,8 +301,7 @@ pub async fn build_cofund_funding_transaction(
     // We need to iterate because the transaction size (and thus fee) depends on
     // whether we have a change output or not
 
-    // Fee rate: 1000 shannon/KB
-    let fee_rate = 1000u64;
+    // Use parameter fee_rate (default 1000 shannon/KB)
     let fee_calculator = FeeCalculator::new(fee_rate);
 
     // Get cell deps first (needed for transaction building)

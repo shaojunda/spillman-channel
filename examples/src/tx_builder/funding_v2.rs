@@ -496,6 +496,7 @@ pub async fn build_funding_transaction(
     user_address: &Address,
     spillman_lock_script: &Script,
     capacity: HumanCapacity,
+    fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, u32)> {
     let capacity_shannon: u64 = capacity.into();
@@ -520,7 +521,7 @@ pub async fn build_funding_transaction(
     let request = FundingRequest {
         script: spillman_lock_script.clone(),
         local_amount: capacity_shannon,
-        fee_rate: 1000, // 1000 shannon/KB
+        fee_rate, // Use parameter, default 1000 shannon/KB
     };
 
     // Create funding context
@@ -615,6 +616,7 @@ pub async fn build_cofund_funding_transaction(
     merchant_address: &Address,
     user_capacity: HumanCapacity,
     spillman_lock_script: &Script,
+    fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, u32)> {
     println!("  - Co-fund 模式：User + Merchant 共同出资");
@@ -664,7 +666,7 @@ pub async fn build_cofund_funding_transaction(
     let user_request = FundingRequest {
         script: spillman_lock_script.clone(),
         local_amount: user_amount,  // user_capacity + buffer
-        fee_rate: 1000,
+        fee_rate, // Use parameter, default 1000 shannon/KB
     };
 
     let user_lock = Script::from(user_address);
@@ -686,7 +688,7 @@ pub async fn build_cofund_funding_transaction(
     let merchant_request = FundingRequest {
         script: spillman_lock_script.clone(),
         local_amount: merchant_amount,  // min occupied capacity
-        fee_rate: 1000,
+        fee_rate, // Use parameter, default 1000 shannon/KB
     };
 
     let merchant_context = FundingContext {

@@ -46,6 +46,21 @@ impl SpillmanLockArgs {
         }
     }
 
+    pub fn new_with_algorithm(
+        merchant_pubkey_hash: [u8; 20],
+        user_pubkey_hash: [u8; 20],
+        timeout_timestamp: u64,
+        algorithm_id: u8,
+    ) -> Self {
+        Self {
+            merchant_pubkey_hash,
+            user_pubkey_hash,
+            timeout_timestamp,
+            algorithm_id,
+            version: 0,
+        }
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(50);
         bytes.extend_from_slice(&self.merchant_pubkey_hash);

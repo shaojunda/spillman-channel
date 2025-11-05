@@ -39,6 +39,10 @@ enum Commands {
         #[arg(long)]
         timeout_timestamp: Option<u64>,
 
+        /// 手续费率（shannon/KB，默认 1000）
+        #[arg(long, default_value = "1000")]
+        fee_rate: u64,
+
         /// 是否使用 co-fund 模式（User + Merchant 共同出资）
         #[arg(long, default_value = "false")]
         co_fund: bool,
@@ -107,6 +111,10 @@ enum Commands {
         #[arg(long, default_value = "config.toml")]
         config: String,
 
+        /// 手续费率（shannon/KB，默认 1000）
+        #[arg(long, default_value = "1000")]
+        fee_rate: u64,
+
         /// 使用 refund_v2 实现（新版本）
         #[arg(long, default_value = "false")]
         use_v2: bool,
@@ -124,6 +132,7 @@ async fn main() -> Result<()> {
             merchant_address,
             capacity,
             timeout_timestamp,
+            fee_rate,
             co_fund,
             use_v2,
             broadcast,
@@ -136,6 +145,7 @@ async fn main() -> Result<()> {
                     merchant_address.as_deref(),
                     capacity,
                     timeout_timestamp,
+                    fee_rate,
                     co_fund,
                     broadcast,
                 )
@@ -148,6 +158,7 @@ async fn main() -> Result<()> {
                     merchant_address.as_deref(),
                     capacity,
                     timeout_timestamp,
+                    fee_rate,
                     co_fund,
                     broadcast,
                 )
@@ -178,14 +189,15 @@ async fn main() -> Result<()> {
         Commands::Refund {
             tx_file,
             config,
+            fee_rate,
             use_v2,
         } => {
             if use_v2 {
                 // Use v2 implementation (refund_v2)
-                commands::refund::execute_v2(&tx_file, &config).await?;
+                commands::refund::execute_v2(&tx_file, &config, fee_rate).await?;
             } else {
                 // Use v1 implementation (original refund)
-                commands::refund::execute(&tx_file, &config).await?;
+                commands::refund::execute(&tx_file, &config, fee_rate).await?;
             }
         }
     }

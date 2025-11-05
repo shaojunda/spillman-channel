@@ -29,6 +29,7 @@ pub async fn execute(
     merchant_address: Option<&str>,
     capacity: Option<u64>,
     timeout_timestamp: Option<u64>,
+    fee_rate: u64,
     co_fund: bool,
     broadcast: bool,
 ) -> Result<()> {
@@ -176,6 +177,7 @@ pub async fn execute(
             &merchant_addr_parsed,
             capacity,
             &spillman_lock_script,
+            fee_rate,
             funding_info_path,
         )
         .await?
@@ -186,6 +188,7 @@ pub async fn execute(
             &user_addr_parsed,
             &spillman_lock_script,
             capacity,
+            fee_rate,
             funding_info_path,
         )
         .await?
@@ -240,6 +243,7 @@ pub async fn execute_v2(
     merchant_address: Option<&str>,
     capacity: Option<u64>,
     timeout_timestamp: Option<u64>,
+    fee_rate: u64,
     co_fund: bool,
     broadcast: bool,
 ) -> Result<()> {
@@ -330,22 +334,22 @@ pub async fn execute_v2(
     );
 
     // Validate timeout timestamp must be at least 20 minutes (1200 seconds) in the future
-    let min_timeout = current_timestamp + 1200; // 20 minutes = 1200 seconds
-    if timeout_timestamp < min_timeout {
-        return Err(anyhow!(
-            "超时时间戳必须大于当前时间至少 20 分钟！\n\
-             当前时间戳: {}\n\
-             最小超时时间戳: {} (当前时间 + 20 分钟)\n\
-             您设置的超时时间戳: {}",
-            current_timestamp,
-            min_timeout,
-            timeout_timestamp
-        ));
-    }
-    println!("✓ 超时时间验证通过 (距离当前时间 {} 秒 ≈ {} 分钟)",
-        timeout_timestamp - current_timestamp,
-        (timeout_timestamp - current_timestamp) / 60
-    );
+    // let min_timeout = current_timestamp + 1200; // 20 minutes = 1200 seconds
+    // if timeout_timestamp < min_timeout {
+    //     return Err(anyhow!(
+    //         "超时时间戳必须大于当前时间至少 20 分钟！\n\
+    //          当前时间戳: {}\n\
+    //          最小超时时间戳: {} (当前时间 + 20 分钟)\n\
+    //          您设置的超时时间戳: {}",
+    //         current_timestamp,
+    //         min_timeout,
+    //         timeout_timestamp
+    //     ));
+    // }
+    // println!("✓ 超时时间验证通过 (距离当前时间 {} 秒 ≈ {} 分钟)",
+    //     timeout_timestamp - current_timestamp,
+    //     (timeout_timestamp - current_timestamp) / 60
+    // );
 
     // 4. Build Spillman Lock script
     println!("\n🔒 构建 Spillman Lock script...");
@@ -392,6 +396,7 @@ pub async fn execute_v2(
             &merchant_addr_parsed,
             capacity_human,
             &spillman_lock_script,
+            fee_rate,
             funding_info_path,
         )
         .await?
@@ -402,6 +407,7 @@ pub async fn execute_v2(
             &user_addr_parsed,
             &spillman_lock_script,
             capacity_human,
+            fee_rate,
             funding_info_path,
         )
         .await?

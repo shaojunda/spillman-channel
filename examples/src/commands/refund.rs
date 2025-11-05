@@ -12,6 +12,7 @@ use crate::{
 pub async fn execute(
     tx_file: &str,
     config_path: &str,
+    fee_rate: u64,
 ) -> Result<()> {
     println!("🔄 执行 Refund 命令");
     println!("═══════════════════════════════════════════");
@@ -77,6 +78,7 @@ pub async fn execute(
         user_lock,
         merchant_lock,
         timeout_timestamp,
+        fee_rate,
         &output_path,
     )?;
 
@@ -109,6 +111,7 @@ pub async fn execute(
 pub async fn execute_v2(
     tx_file: &str,
     config_path: &str,
+    fee_rate: u64,
 ) -> Result<()> {
     println!("🔄 执行 Refund 命令 (v2)");
     println!("═══════════════════════════════════════════");
@@ -168,6 +171,7 @@ pub async fn execute_v2(
         &funding_tx,
         &user_address,
         merchant_address.as_ref(),
+        fee_rate,
         &output_path,
     ).await?;
 
