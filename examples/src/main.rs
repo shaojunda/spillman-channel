@@ -84,6 +84,10 @@ enum Commands {
         /// 配置文件路径
         #[arg(long, default_value = "config.toml")]
         config: String,
+
+        /// 交易费率（shannons per KB，默认 1000）
+        #[arg(long, default_value = "1000")]
+        fee_rate: u64,
     },
 
     /// 商户结算 commitment transaction
@@ -176,8 +180,9 @@ async fn main() -> Result<()> {
             amount,
             channel_file,
             config,
+            fee_rate,
         } => {
-            commands::pay::execute(&amount, &channel_file, &config).await?;
+            commands::pay::execute(&amount, &channel_file, &config, fee_rate).await?;
         }
         Commands::Settle {
             tx_file,

@@ -37,6 +37,7 @@ pub async fn execute(
     amount: &str,
     channel_file: &str,
     config_path: &str,
+    fee_rate: u64,
 ) -> Result<()> {
     println!("\n═══════════════════════════════════════════════════════");
     println!("  💸 创建 Commitment Transaction (链下支付)");
@@ -161,6 +162,7 @@ pub async fn execute(
         merchant_lock_script,
         payment_amount_shannons,
         merchant_min_capacity,
+        fee_rate,
         &output_file,
     )?;
 

@@ -8,14 +8,13 @@ use ckb_types::{
     packed::CellDepVec,
     prelude::*,
 };
-use std::{fs, str::FromStr};
+use std::fs;
 
-use crate::utils::config::load_config;
-
-// Constants for witness structure
-const EMPTY_WITNESS_ARGS_SIZE: usize = 16;
-const UNLOCK_TYPE_SIZE: usize = 1;
-const SIGNATURE_SIZE: usize = 65;
+use crate::{
+    utils::config::load_config,
+    tx_builder::funding_v2::build_multisig_config,
+    tx_builder::witness_utils::{EMPTY_WITNESS_ARGS_SIZE, UNLOCK_TYPE_SIZE, SIGNATURE_SIZE},
+};
 
 /// Execute settle command - merchant signs and broadcasts commitment transaction
 pub async fn execute(
@@ -32,11 +31,55 @@ pub async fn execute(
     let config = load_config(config_path)?;
     println!("✓ 配置加载完成");
 
-    // 2. Parse merchant private key from config
-    println!("\n🔑 加载商户私钥...");
-    let merchant_privkey = Privkey::from_str(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))
-        .map_err(|e| anyhow!("Failed to parse merchant private key: {:?}", e))?;
-    println!("✓ 商户私钥加载完成");
+    // 2. Check if merchant uses multisig
+    println!("\n🔑 检测商户签名类型...");
+    let is_multisig = config.merchant.is_multisig();
+
+    let (merchant_multisig_config, merchant_privkeys) = if is_multisig {
+        println!("✓ 商户使用多签地址");
+
+        // Get multisig parameters from config
+        let threshold = config.merchant.multisig_threshold
+            .ok_or_else(|| anyhow!("Merchant multisig_threshold is required"))?;
+        let total = config.merchant.multisig_total
+            .ok_or_else(|| anyhow!("Merchant multisig_total is required"))?;
+
+        // Parse private keys
+        let privkeys = config.merchant.private_keys.as_ref()
+            .ok_or_else(|| anyhow!("Merchant private_keys is required for multisig"))?;
+
+        let parsed_keys: Result<Vec<secp256k1::SecretKey>> = privkeys
+            .iter()
+            .map(|key_str| {
+                let key_bytes = hex::decode(key_str.trim_start_matches("0x"))
+                    .map_err(|e| anyhow!("Failed to decode private key: {}", e))?;
+                secp256k1::SecretKey::from_slice(&key_bytes)
+                    .map_err(|e| anyhow!("Invalid private key: {}", e))
+            })
+            .collect();
+
+        let keys = parsed_keys?;
+        println!("  - 已加载 {} 个私钥", keys.len());
+
+        // Build multisig config
+        let multisig_config = build_multisig_config(&keys, threshold, total)?;
+        println!("  - 多签配置: {}-of-{}", multisig_config.threshold(), multisig_config.sighash_addresses().len());
+
+        (Some(multisig_config), keys)
+    } else {
+        println!("✓ 商户使用单签地址");
+
+        // Parse single private key
+        let key_str = config.merchant.private_key.as_ref()
+            .ok_or_else(|| anyhow!("Merchant private_key is required"))?;
+
+        let key_bytes = hex::decode(key_str.trim_start_matches("0x"))
+            .map_err(|e| anyhow!("Failed to decode private key: {}", e))?;
+        let key = secp256k1::SecretKey::from_slice(&key_bytes)
+            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
+
+        (None, vec![key])
+    };
 
     // 3. Load commitment transaction from file
     println!("\n📄 加载 Commitment 交易: {}", tx_file);
@@ -55,12 +98,30 @@ pub async fn execute(
     println!("  - Inputs: {}", tx.inputs().len());
     println!("  - Outputs: {}", tx.outputs().len());
 
-    // 4. Verify witness structure
+    // 4. Verify witness structure and determine sizes
     let witness = tx.witnesses().get(0)
         .ok_or_else(|| anyhow!("Missing witness"))?;
     let witness_data = witness.raw_data();
 
-    let expected_size = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE;
+    // Calculate expected witness size based on multisig config
+    let (merchant_sig_start, merchant_sig_size, expected_size) = if let Some(ref multisig_config) = merchant_multisig_config {
+        let config_data = multisig_config.to_witness_data();
+        let threshold = multisig_config.threshold() as usize;
+        let merchant_sigs_size = threshold * SIGNATURE_SIZE;
+
+        let start = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
+        let size = config_data.len() + merchant_sigs_size;
+        let total = start + size + SIGNATURE_SIZE;
+
+        (start, size, total)
+    } else {
+        let start = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
+        let size = SIGNATURE_SIZE;
+        let total = start + size + SIGNATURE_SIZE;
+
+        (start, size, total)
+    };
+
     if witness_data.len() != expected_size {
         return Err(anyhow!(
             "Invalid witness size: expected {}, got {}",
@@ -70,8 +131,7 @@ pub async fn execute(
     }
 
     // Check if merchant signature is placeholder (all zeros)
-    let merchant_sig_start = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
-    let merchant_sig_end = merchant_sig_start + SIGNATURE_SIZE;
+    let merchant_sig_end = merchant_sig_start + merchant_sig_size;
     let merchant_sig_placeholder = &witness_data[merchant_sig_start..merchant_sig_end];
 
     if !merchant_sig_placeholder.iter().all(|&b| b == 0) {
@@ -84,17 +144,47 @@ pub async fn execute(
     println!("\n🔐 商户签名交易...");
     let signing_message = compute_signing_message(&tx);
 
-    let merchant_sig = merchant_privkey
-        .sign_recoverable(&signing_message.into())
-        .map_err(|e| anyhow!("Failed to sign transaction: {:?}", e))?
-        .serialize();
+    // Build merchant signatures based on single-sig or multisig
+    let merchant_witness_data = if let Some(ref multisig_config) = merchant_multisig_config {
+        // Multisig: need to sign with threshold number of keys
+        let threshold = multisig_config.threshold() as usize;
+        let mut signatures = Vec::new();
 
-    println!("✓ 签名完成");
+        for (i, key) in merchant_privkeys.iter().take(threshold).enumerate() {
+            let privkey_bytes = key.secret_bytes();
+            let privkey = Privkey::from_slice(&privkey_bytes);
+
+            let sig = privkey
+                .sign_recoverable(&signing_message.into())
+                .map_err(|e| anyhow!("Failed to sign with key {}: {:?}", i, e))?
+                .serialize();
+
+            signatures.extend_from_slice(&sig);
+            println!("  ✓ 签名 {}/{} 完成", i + 1, threshold);
+        }
+
+        // Build multisig witness: multisig_config + signatures
+        let mut multisig_witness = multisig_config.to_witness_data();
+        multisig_witness.extend_from_slice(&signatures);
+        multisig_witness
+    } else {
+        // Single-sig: just one signature
+        let privkey_bytes = merchant_privkeys[0].secret_bytes();
+        let privkey = Privkey::from_slice(&privkey_bytes);
+
+        let sig = privkey
+            .sign_recoverable(&signing_message.into())
+            .map_err(|e| anyhow!("Failed to sign transaction: {:?}", e))?
+            .serialize();
+
+        println!("  ✓ 签名完成");
+        sig.to_vec()
+    };
 
     // 6. Update witness with merchant signature
     let mut new_witness = Vec::with_capacity(expected_size);
     new_witness.extend_from_slice(&witness_data[..merchant_sig_start]); // EMPTY_WITNESS_ARGS + UNLOCK_TYPE
-    new_witness.extend_from_slice(&merchant_sig); // Merchant signature
+    new_witness.extend_from_slice(&merchant_witness_data); // Merchant signature(s)
     new_witness.extend_from_slice(&witness_data[merchant_sig_end..]); // User signature
 
     let signed_tx = tx

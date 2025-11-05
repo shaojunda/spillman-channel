@@ -13,10 +13,12 @@
 /// ## Witness
 /// - EMPTY_WITNESS_ARGS (16 bytes)
 /// - UNLOCK_TYPE_COMMITMENT (1 byte, 0x00)
-/// - Merchant signature (65 bytes, placeholder, filled by merchant during settle)
+/// - Merchant signature (variable length, placeholder, filled by merchant during settle)
+///   - Single-sig: 65 bytes
+///   - Multisig: multisig_config + threshold * 65 bytes
 /// - User signature (65 bytes, signed by user)
 ///
-/// Total: 147 bytes
+/// Total: Variable length based on merchant's signature type
 ///
 /// # Signing Flow
 ///
@@ -26,7 +28,7 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
-use ckb_sdk::constants::ONE_CKB;
+use ckb_sdk::{constants::ONE_CKB, unlock::MultisigConfig};
 use ckb_types::{
     bytes::Bytes,
     core::{Capacity, DepType, TransactionView},
@@ -36,7 +38,12 @@ use ckb_types::{
 };
 use std::str::FromStr;
 
-use crate::utils::config::Config;
+use crate::{
+    utils::config::Config,
+    tx_builder::funding_v2::build_multisig_config,
+};
+
+use crate::tx_builder::witness_utils::{SIGNATURE_SIZE, EMPTY_WITNESS_ARGS_SIZE, UNLOCK_TYPE_SIZE};
 
 // Constants for witness structure
 const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
@@ -62,6 +69,7 @@ const UNLOCK_TYPE_COMMITMENT: u8 = 0x00;
 /// * `merchant_lock_script` - Merchant's lock script (for payment output)
 /// * `payment_amount` - Amount to pay to merchant (in shannons, excluding minimum occupied capacity)
 /// * `merchant_min_capacity` - Merchant cell's minimum occupied capacity (in shannons)
+/// * `fee_rate` - Fee rate in shannons per KB (default: 1000)
 /// * `output_path` - Path to save the transaction JSON
 pub fn build_commitment_transaction(
     config: &Config,
@@ -73,6 +81,7 @@ pub fn build_commitment_transaction(
     merchant_lock_script: Script,
     payment_amount: u64,
     merchant_min_capacity: u64,
+    fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, TransactionView)> {
     println!("📝 构建 Commitment 交易...");
@@ -80,6 +89,33 @@ pub fn build_commitment_transaction(
     // Parse user private key from config
     let user_privkey = Privkey::from_str(config.user.private_key.as_ref().expect("User private_key is required"))
         .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
+
+    // Check if merchant uses multisig and build config if needed
+    let merchant_multisig_config = if config.merchant.is_multisig() {
+        let threshold = config.merchant.multisig_threshold
+            .ok_or_else(|| anyhow!("Merchant multisig_threshold is required"))?;
+        let total = config.merchant.multisig_total
+            .ok_or_else(|| anyhow!("Merchant multisig_total is required"))?;
+
+        // Parse merchant public keys (not private keys, just for config structure)
+        let privkeys = config.merchant.private_keys.as_ref()
+            .ok_or_else(|| anyhow!("Merchant private_keys is required for multisig"))?;
+
+        let parsed_keys: Result<Vec<secp256k1::SecretKey>> = privkeys
+            .iter()
+            .map(|key_str| {
+                let key_bytes = hex::decode(key_str.trim_start_matches("0x"))
+                    .map_err(|e| anyhow!("Failed to decode private key: {}", e))?;
+                secp256k1::SecretKey::from_slice(&key_bytes)
+                    .map_err(|e| anyhow!("Invalid private key: {}", e))
+            })
+            .collect();
+
+        let keys = parsed_keys?;
+        Some(build_multisig_config(&keys, threshold, total)?)
+    } else {
+        None
+    };
 
     // Build Spillman Lock outpoint
     let spillman_lock_outpoint = OutPoint::new_builder()
@@ -108,8 +144,8 @@ pub fn build_commitment_transaction(
         .dep_type(DepType::Code)
         .build();
 
-    // Build transaction
-    let tx = build_commitment_transaction_internal(
+    // Build transaction with iterative fee calculation
+    let (tx, actual_fee) = build_commitment_transaction_internal(
         spillman_lock_outpoint,
         spillman_lock_capacity,
         spillman_lock_script,
@@ -120,14 +156,15 @@ pub fn build_commitment_transaction(
         spillman_lock_dep,
         auth_dep,
         &user_privkey,
+        merchant_multisig_config.as_ref(),
+        fee_rate,
     )?;
 
     let tx_hash = tx.hash();
 
     // Print summary
     let merchant_total_capacity = payment_amount + merchant_min_capacity;
-    let fee_estimate = 1000u64;
-    let change_amount = spillman_lock_capacity - merchant_total_capacity - fee_estimate;
+    let change_amount = spillman_lock_capacity - merchant_total_capacity - actual_fee;
 
     println!("✓ Commitment transaction built");
     println!("  - Transaction hash: {:#x}", tx_hash);
@@ -136,7 +173,7 @@ pub fn build_commitment_transaction(
         merchant_min_capacity / ONE_CKB,
         merchant_total_capacity / ONE_CKB);
     println!("  - Change to user: {} CKB", change_amount / ONE_CKB);
-    println!("  - Estimated fee: 0.00001 CKB");
+    println!("  - Transaction fee: {} CKB", actual_fee as f64 / ONE_CKB as f64);
 
     // Save transaction
     let tx_json = ckb_jsonrpc_types::TransactionView::from(tx.clone());
@@ -153,7 +190,7 @@ pub fn build_commitment_transaction(
     Ok((tx_hash.unpack(), tx))
 }
 
-/// Internal function to build and sign commitment transaction
+/// Internal function to build and sign commitment transaction with iterative fee calculation
 fn build_commitment_transaction_internal(
     spillman_lock_outpoint: OutPoint,
     spillman_lock_capacity: u64,
@@ -165,83 +202,117 @@ fn build_commitment_transaction_internal(
     spillman_lock_dep: CellDep,
     auth_dep: CellDep,
     user_privkey: &Privkey,
-) -> Result<TransactionView> {
+    merchant_multisig_config: Option<&MultisigConfig>,
+    fee_rate: u64,
+) -> Result<(TransactionView, u64)> {
     // Calculate merchant's total capacity (payment + minimum occupied capacity)
     let merchant_total_capacity = payment_amount + merchant_min_capacity;
 
-    // Calculate change amount (spillman_capacity - merchant_total - fee estimate)
-    let fee_estimate = 1000u64; // 0.00001 CKB
-    let change_amount = spillman_lock_capacity
-        .checked_sub(merchant_total_capacity)
-        .and_then(|v| v.checked_sub(fee_estimate))
-        .ok_or_else(|| anyhow!(
-            "Insufficient capacity: need {} (merchant) + {} (fee) CKB, have {} CKB",
-            merchant_total_capacity / ONE_CKB,
-            fee_estimate / ONE_CKB,
-            spillman_lock_capacity / ONE_CKB
-        ))?;
+    // Iteratively calculate fee to stabilize transaction size
+    let max_iterations = 10;
+    let mut current_fee = 1000u64; // Initial estimate
+    let mut final_tx = None;
 
-    // Build inputs: Spillman Lock cell
-    let input = CellInput::new_builder()
-        .previous_output(spillman_lock_outpoint)
-        .since(Uint64::from(0u64)) // No time lock for commitment path
-        .build();
+    for iteration in 0..max_iterations {
+        // Calculate change amount with current fee
+        let change_amount = spillman_lock_capacity
+            .checked_sub(merchant_total_capacity)
+            .and_then(|v| v.checked_sub(current_fee))
+            .ok_or_else(|| anyhow!(
+                "Insufficient capacity: need {} (merchant) + {} (fee) CKB, have {} CKB",
+                merchant_total_capacity / ONE_CKB,
+                current_fee / ONE_CKB,
+                spillman_lock_capacity / ONE_CKB
+            ))?;
 
-    // Build outputs
-    // Output 0: User's address (change)
-    let user_output = CellOutput::new_builder()
-        .lock(user_lock_script)
-        .capacity(Capacity::shannons(change_amount).pack())
-        .build();
+        // Build inputs: Spillman Lock cell
+        let input = CellInput::new_builder()
+            .previous_output(spillman_lock_outpoint.clone())
+            .since(Uint64::from(0u64)) // No time lock for commitment path
+            .build();
 
-    // Output 1: Merchant's address (payment + minimum occupied capacity)
-    let merchant_output = CellOutput::new_builder()
-        .lock(merchant_lock_script)
-        .capacity(Capacity::shannons(merchant_total_capacity).pack())
-        .build();
+        // Build outputs
+        // Output 0: User's address (change)
+        let user_output = CellOutput::new_builder()
+            .lock(user_lock_script.clone())
+            .capacity(Capacity::shannons(change_amount).pack())
+            .build();
 
-    // Build witness with placeholder signatures (will be replaced after signing)
-    let mut witness_data = Vec::with_capacity(147);
-    witness_data.extend_from_slice(&EMPTY_WITNESS_ARGS);
-    witness_data.push(UNLOCK_TYPE_COMMITMENT);
-    // Placeholder for merchant signature (65 bytes of zeros)
-    witness_data.extend_from_slice(&[0u8; 65]);
-    // Placeholder for user signature (65 bytes of zeros)
-    witness_data.extend_from_slice(&[0u8; 65]);
+        // Output 1: Merchant's address (payment + minimum occupied capacity)
+        let merchant_output = CellOutput::new_builder()
+            .lock(merchant_lock_script.clone())
+            .capacity(Capacity::shannons(merchant_total_capacity).pack())
+            .build();
 
-    let witness = Bytes::from(witness_data);
+        // Calculate merchant placeholder size based on multisig config
+        let merchant_placeholder_size = crate::tx_builder::witness_utils::calculate_merchant_signature_size(merchant_multisig_config);
 
-    // Build cell_deps
-    let cell_deps = CellDepVec::new_builder()
-        .push(spillman_lock_dep)
-        .push(auth_dep)
-        .build();
+        // Calculate total witness size
+        let witness_size = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + merchant_placeholder_size + SIGNATURE_SIZE;
 
-    // Build transaction
-    let tx = Transaction::default()
-        .as_advanced_builder()
-        .cell_deps(cell_deps)
-        .input(input)
-        .output(user_output)
-        .output(merchant_output)
-        .output_data(Bytes::new().pack())
-        .output_data(Bytes::new().pack())
-        .witness(witness.pack())
-        .build();
+        // Build witness with placeholder signatures (will be replaced after signing)
+        let mut witness_data = Vec::with_capacity(witness_size);
+        witness_data.extend_from_slice(&EMPTY_WITNESS_ARGS);
+        witness_data.push(UNLOCK_TYPE_COMMITMENT);
+        // Placeholder for merchant signature (zeros)
+        witness_data.extend_from_slice(&vec![0u8; merchant_placeholder_size]);
+        // Placeholder for user signature (65 bytes of zeros)
+        witness_data.extend_from_slice(&[0u8; SIGNATURE_SIZE]);
 
-    // Convert to TransactionView
-    let tx_view: TransactionView = tx.into();
+        let witness = Bytes::from(witness_data);
 
-    // Sign the transaction with user's key
-    let signed_tx = sign_commitment_transaction(tx_view, user_privkey)?;
+        // Build cell_deps
+        let cell_deps = CellDepVec::new_builder()
+            .push(spillman_lock_dep.clone())
+            .push(auth_dep.clone())
+            .build();
 
-    Ok(signed_tx)
+        // Build transaction
+        let tx = Transaction::default()
+            .as_advanced_builder()
+            .cell_deps(cell_deps)
+            .input(input)
+            .output(user_output)
+            .output(merchant_output)
+            .output_data(Bytes::new().pack())
+            .output_data(Bytes::new().pack())
+            .witness(witness.pack())
+            .build();
+
+        // Convert to TransactionView
+        let tx_view: TransactionView = tx.into();
+
+        // Sign the transaction with user's key
+        let signed_tx = sign_commitment_transaction(tx_view, user_privkey, merchant_placeholder_size)?;
+
+        // Calculate actual fee for this transaction
+        let tx_size = signed_tx.data().as_reader().serialized_size_in_block() as u64;
+        let actual_fee = (tx_size * fee_rate + 999) / 1000; // Round up
+
+        println!("Iteration {}: Actual fee: {} CKB", iteration, actual_fee);
+
+        // Check if fee has stabilized
+        if actual_fee == current_fee {
+            final_tx = Some((signed_tx, current_fee));
+            break;
+        }
+
+        current_fee = actual_fee;
+
+        if iteration == max_iterations - 1 {
+            final_tx = Some((signed_tx, current_fee));
+        }
+    }
+
+    let (tx, fee) = final_tx.ok_or_else(|| anyhow!("Failed to build commitment transaction"))?;
+    Ok((tx, fee))
 }
 
 /// Sign the commitment transaction with user's private key
 fn sign_commitment_transaction(
     tx: TransactionView,
     user_privkey: &Privkey,
+    merchant_placeholder_size: usize,
 ) -> Result<TransactionView> {
     // Prepare signing message
     let signing_message = compute_signing_message(&tx);
@@ -257,13 +328,16 @@ fn sign_commitment_transaction(
         .ok_or_else(|| anyhow!("Missing witness"))?;
 
     let witness_data = witness.raw_data();
-    if witness_data.len() != 147 {
-        return Err(anyhow!("Invalid witness size: expected 147, got {}", witness_data.len()));
+    let expected_size = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + merchant_placeholder_size + SIGNATURE_SIZE;
+
+    if witness_data.len() != expected_size {
+        return Err(anyhow!("Invalid witness size: expected {}, got {}", expected_size, witness_data.len()));
     }
 
     // Build new witness with user signature
-    let mut new_witness = Vec::with_capacity(147);
-    new_witness.extend_from_slice(&witness_data[..82]); // Copy EMPTY_WITNESS_ARGS + UNLOCK_TYPE + merchant_sig_placeholder
+    let merchant_sig_end = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + merchant_placeholder_size;
+    let mut new_witness = Vec::with_capacity(expected_size);
+    new_witness.extend_from_slice(&witness_data[..merchant_sig_end]); // Copy EMPTY_WITNESS_ARGS + UNLOCK_TYPE + merchant_sig_placeholder
     new_witness.extend_from_slice(&user_sig); // Add user signature
 
     // Build new transaction with signed witness

@@ -91,19 +91,8 @@ const REFUND_WITNESS_SIZE_SINGLE_SIG: usize = 147; // 16 + 1 + 65 + 65
 /// # Returns
 /// Total witness size in bytes
 fn calculate_refund_witness_size(merchant_multisig_config: Option<&ckb_sdk::unlock::MultisigConfig>) -> usize {
-    let base_size = 16 + 1; // EMPTY_WITNESS_ARGS + UNLOCK_TYPE_TIMEOUT
-    let user_sig_size = 65; // User signature always 65 bytes
-
-    let merchant_sig_size = if let Some(config) = merchant_multisig_config {
-        // Multisig: config_data + threshold * 65 bytes signatures
-        let config_data = config.to_witness_data();
-        config_data.len() + (config.threshold() as usize) * 65
-    } else {
-        // Single-sig: 65 bytes signature
-        65
-    };
-
-    base_size + merchant_sig_size + user_sig_size
+    use crate::tx_builder::witness_utils;
+    witness_utils::calculate_refund_witness_size(merchant_multisig_config)
 }
 
 /// Refund request parameters
