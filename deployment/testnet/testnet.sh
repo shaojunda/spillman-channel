@@ -22,6 +22,7 @@ ckb-cli --url https://testnet.ckb.dev deploy gen-txs \
     --migration-dir ./migrations \
     --from-address ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwv48lup30y6ap3al3hgvk32ckmrpnsu9szgrgrq \
     --sign-now \
+    --fee-rate 7000 \
     --info-file testnet.json
 
 echo ""

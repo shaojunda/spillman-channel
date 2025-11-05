@@ -1,0 +1,21 @@
+{
+  "cell_recipes": [
+    {
+      "name": "auth",
+      "tx_hash": "0x3f0fe5376b847b0c286184bb59d38765841e135d7d64f87b2bf7014c6316eee2",
+      "index": 0,
+      "occupied_capacity": 15096500000000,
+      "data_hash": "0x07f2364fe08ef796277d85ead9f44140b5c60feb7a6332f66c6794fdefc3645b",
+      "type_id": null
+    },
+    {
+      "name": "spillman-lock",
+      "tx_hash": "0xa082bd6b7cebf7bc685cd3a93b3460b3d31a22f4dfd55f645e9e2d6c07c2a84e",
+      "index": 0,
+      "occupied_capacity": 7167000000000,
+      "data_hash": "0x274d374e74e2787eb0e1b7a1b4e98866eaf826c3f4fc86004cec1e002333ff69",
+      "type_id": "0x41fa54ee27a517db245b014116fe2baff1dcb639d42fc14be43c315ea3cef9f2"
+    }
+  ],
+  "dep_group_recipes": []
+}
