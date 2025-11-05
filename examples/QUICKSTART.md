@@ -30,7 +30,7 @@ The Spillman Lock contract is already deployed on CKB Testnet:
 [spillman_lock]
 code_hash = "0x41fa54ee27a517db245b014116fe2baff1dcb639d42fc14be43c315ea3cef9f2"
 hash_type = "type"
-tx_hash = "0xb6fb2aac95bf235ae60f98c77541c27501003dcd0abf1f76d874ffe4ff051b27"
+tx_hash = "0x3ad0f4b3f08927b79d8a94bbad5f265694e969ab2ddfde178893e1c6a954dd5f"
 index = 0
 
 [auth]
@@ -89,7 +89,7 @@ address = "ckt1..."
 [spillman_lock]
 code_hash = "0x41fa54ee27a517db245b014116fe2baff1dcb639d42fc14be43c315ea3cef9f2"
 hash_type = "type"
-tx_hash = "0xb6fb2aac95bf235ae60f98c77541c27501003dcd0abf1f76d874ffe4ff051b27"
+tx_hash = "0x3ad0f4b3f08927b79d8a94bbad5f265694e969ab2ddfde178893e1c6a954dd5f"
 index = 0
 
 [auth]
