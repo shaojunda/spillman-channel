@@ -447,17 +447,17 @@ fn verify_commitment_output_structure(
         // Need to hash the full multisig_config to get the 20-byte args
         let multisig_hash = &blake2b_256(merchant_lock_data)[0..20];
 
-        // Determine hash_type based on algorithm_id:
-        // - algorithm_id = 6: Legacy multisig (hash_type = Type)
-        // - algorithm_id = 7: V2 multisig (hash_type = Data1)
-        let hash_type = if algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2 {
-            ScriptHashType::Data1
+        // Determine code_hash and hash_type based on algorithm_id:
+        // - algorithm_id = 6: Legacy multisig (code_hash = SECP256K1_MULTISIG_CODE_HASH, hash_type = Type)
+        // - algorithm_id = 7: V2 multisig (code_hash = SECP256K1_MULTISIG_V2_CODE_HASH, hash_type = Data1)
+        let (code_hash, hash_type) = if algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2 {
+            (SECP256K1_MULTISIG_V2_CODE_HASH, ScriptHashType::Data1)
         } else {
-            ScriptHashType::Type
+            (SECP256K1_MULTISIG_CODE_HASH, ScriptHashType::Type)
         };
 
         Script::new_builder()
-            .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
+            .code_hash(code_hash.pack())
             .hash_type(hash_type)
             .args(multisig_hash.pack())
             .build()
@@ -552,17 +552,17 @@ fn verify_refund_output_structure(
             // Need to hash the full multisig_config to get the 20-byte args
             let multisig_hash = &blake2b_256(merchant_lock_data)[0..20];
 
-            // Determine hash_type based on algorithm_id:
-            // - algorithm_id = 6: Legacy multisig (hash_type = Type)
-            // - algorithm_id = 7: V2 multisig (hash_type = Data1)
-            let hash_type = if algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2 {
-                ScriptHashType::Data1
+            // Determine code_hash and hash_type based on algorithm_id:
+            // - algorithm_id = 6: Legacy multisig (code_hash = SECP256K1_MULTISIG_CODE_HASH, hash_type = Type)
+            // - algorithm_id = 7: V2 multisig (code_hash = SECP256K1_MULTISIG_V2_CODE_HASH, hash_type = Data1)
+            let (code_hash, hash_type) = if algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2 {
+                (SECP256K1_MULTISIG_V2_CODE_HASH, ScriptHashType::Data1)
             } else {
-                ScriptHashType::Type
+                (SECP256K1_MULTISIG_CODE_HASH, ScriptHashType::Type)
             };
 
             Script::new_builder()
-                .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
+                .code_hash(code_hash.pack())
                 .hash_type(hash_type)
                 .args(multisig_hash.pack())
                 .build()
