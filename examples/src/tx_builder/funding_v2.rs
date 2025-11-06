@@ -406,6 +406,118 @@ impl FundingTxBuilder {
         (output, data)
     }
 
+    /// Collect xUDT cells and add change output if needed
+    ///
+    /// This method modifies the base transaction to:
+    /// 1. Add xUDT inputs to cover the required amount
+    /// 2. Add xUDT change output if there's余额
+    async fn balance_xudt_cells(
+        &self,
+        mut base_tx: TransactionView,
+        cell_collector: &mut dyn CellCollector,
+    ) -> Result<TransactionView> {
+        // Only process if this is an xUDT transaction
+        let xudt_amount = match self.request.xudt_amount {
+            Some(amount) if amount > 0 => amount,
+            _ => return Ok(base_tx),
+        };
+
+        let type_script = self.request.xudt_type_script.as_ref()
+            .ok_or_else(|| anyhow!("xUDT amount specified but no type script"))?;
+
+        println!("  - Collecting xUDT cells for amount: {}", xudt_amount);
+
+        // Collect xUDT cells
+        use ckb_sdk::traits::CellQueryOptions;
+        let query = CellQueryOptions::new_lock(self.context.funding_source_lock_script.clone());
+        let (cells, _total_capacity) = cell_collector.collect_live_cells(&query, false)?;
+
+        // Filter cells with matching type script and collect xUDT amounts
+        let mut xudt_inputs = vec![];
+        let mut collected_xudt_amount = 0u128;
+
+        for cell in cells {
+            // Check if cell has the matching type script
+            if let Some(cell_type) = cell.output.type_().to_opt() {
+                if cell_type.as_slice() == type_script.as_slice() {
+                    // Parse xUDT amount from cell data
+                    let data_bytes = cell.output_data.to_vec();
+                    if data_bytes.len() >= 16 {
+                        let amount = u128::from_le_bytes(data_bytes[0..16].try_into().unwrap());
+                        collected_xudt_amount += amount;
+                        xudt_inputs.push(cell);
+
+                        if collected_xudt_amount >= xudt_amount {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if collected_xudt_amount < xudt_amount {
+            return Err(anyhow!(
+                "Insufficient xUDT balance: collected {}, required {}",
+                collected_xudt_amount,
+                xudt_amount
+            ));
+        }
+
+        println!("  - Collected {} xUDT from {} cells", collected_xudt_amount, xudt_inputs.len());
+
+        // Calculate change amount
+        let change_amount = collected_xudt_amount - xudt_amount;
+
+        // Build the updated transaction
+        let mut inputs: Vec<_> = base_tx.inputs().into_iter().collect();
+        let mut outputs: Vec<_> = base_tx.outputs().into_iter().collect();
+        let mut outputs_data: Vec<_> = base_tx.outputs_data().into_iter().collect();
+
+        // Add xUDT inputs
+        for cell in &xudt_inputs {
+            inputs.push(
+                ckb_types::packed::CellInput::new_builder()
+                    .previous_output(cell.out_point.clone())
+                    .build()
+            );
+        }
+
+        // Add xUDT change output if needed
+        if change_amount > 0 {
+            println!("  - Adding xUDT change output: {} xUDT", change_amount);
+
+            // Calculate minimum capacity for xUDT change cell
+            let change_output = CellOutput::new_builder()
+                .lock(self.context.funding_source_lock_script.clone())
+                .type_(Some(type_script.clone()).pack())
+                .build();
+
+            let min_capacity = change_output
+                .occupied_capacity(Capacity::bytes(16).unwrap())
+                .unwrap()
+                .as_u64();
+
+            let change_output = change_output
+                .as_builder()
+                .capacity(Capacity::shannons(min_capacity).pack())
+                .build();
+
+            let change_data = Bytes::from(change_amount.to_le_bytes().to_vec());
+
+            outputs.push(change_output);
+            outputs_data.push(change_data.pack());
+        }
+
+        // Rebuild transaction
+        let tx = base_tx.as_advanced_builder()
+            .set_inputs(inputs)
+            .set_outputs(outputs)
+            .set_outputs_data(outputs_data)
+            .build();
+
+        Ok(tx)
+    }
+
     /// Internal build method that orchestrates the entire build process
     ///
     /// # Arguments
@@ -469,8 +581,11 @@ impl FundingTxBuilder {
                 &tx_dep_provider,
             ).await?;
 
+            // Balance xUDT cells first (if this is an xUDT transaction)
+            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector).await?;
+
             // Balance the transaction (add inputs for this party)
-            balancer.balance_tx_capacity(&base_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?
+            balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?
         } else if is_incremental {
             // Incremental construction: build and balance, but preserve existing signatures
             let base_tx = self.build_base_async(
@@ -480,8 +595,11 @@ impl FundingTxBuilder {
                 &tx_dep_provider,
             ).await?;
 
+            // Balance xUDT cells first (if this is an xUDT transaction)
+            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector).await?;
+
             // Balance the transaction (add inputs for this party)
-            let balanced_tx = balancer.balance_tx_capacity(&base_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?;
+            let balanced_tx = balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?;
 
             // Unlock only the NEW inputs added by this party
             // Get the number of existing inputs from the original transaction
@@ -511,15 +629,22 @@ impl FundingTxBuilder {
 
             builder.set_witnesses(all_witnesses).build().into()
         } else {
-            // First party: normal build_unlocked
-            let (tx, still_locked_groups) = self.build_unlocked(
+            // First party: build, balance xUDT, balance capacity, then unlock
+            let base_tx = self.build_base_async(
                 &mut cell_collector,
                 &cell_dep_resolver,
                 &header_dep_resolver,
                 &tx_dep_provider,
-                &balancer,
-                &unlockers,
-            )?;
+            ).await?;
+
+            // Balance xUDT cells first (if this is an xUDT transaction)
+            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector).await?;
+
+            // Balance capacity
+            let balanced_tx = balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?;
+
+            // Unlock
+            let (tx, still_locked_groups) = unlock_tx(balanced_tx, &tx_dep_provider, &unlockers)?;
 
             if !still_locked_groups.is_empty() {
                 return Err(anyhow!("Some script groups are still locked: {:?}", still_locked_groups));
@@ -583,7 +708,7 @@ pub async fn build_funding_transaction(
     let (xudt_type_script, xudt_cell_dep) = if xudt_amount.is_some() {
         if let Some(ref usdi_config) = config.usdi {
             // Build xUDT type script
-            let code_hash = H256::from_str(&usdi_config.code_hash)
+            let code_hash = H256::from_str(usdi_config.code_hash.trim_start_matches("0x"))
                 .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
             let args = ckb_types::bytes::Bytes::from(
                 hex::decode(usdi_config.args.trim_start_matches("0x"))
@@ -604,7 +729,7 @@ pub async fn build_funding_transaction(
                 .build();
 
             // Build xUDT cell dep
-            let tx_hash = H256::from_str(&usdi_config.tx_hash)
+            let tx_hash = H256::from_str(usdi_config.tx_hash.trim_start_matches("0x"))
                 .map_err(|e| anyhow!("Invalid tx_hash: {}", e))?;
             let out_point = ckb_types::packed::OutPoint::new_builder()
                 .tx_hash(tx_hash.pack())
@@ -750,7 +875,7 @@ pub async fn build_cofund_funding_transaction(
     let (xudt_type_script, xudt_cell_dep) = if user_xudt_amount.is_some() || merchant_xudt_amount.is_some() {
         if let Some(ref usdi_config) = config.usdi {
             // Build xUDT type script
-            let code_hash = H256::from_str(&usdi_config.code_hash)
+            let code_hash = H256::from_str(usdi_config.code_hash.trim_start_matches("0x"))
                 .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
             let args = ckb_types::bytes::Bytes::from(
                 hex::decode(usdi_config.args.trim_start_matches("0x"))
@@ -771,7 +896,7 @@ pub async fn build_cofund_funding_transaction(
                 .build();
 
             // Build xUDT cell dep
-            let tx_hash = H256::from_str(&usdi_config.tx_hash)
+            let tx_hash = H256::from_str(usdi_config.tx_hash.trim_start_matches("0x"))
                 .map_err(|e| anyhow!("Invalid tx_hash: {}", e))?;
             let out_point = ckb_types::packed::OutPoint::new_builder()
                 .tx_hash(tx_hash.pack())

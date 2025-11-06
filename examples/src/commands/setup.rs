@@ -438,7 +438,7 @@ pub async fn execute_v2(
             use ckb_types::prelude::*;
             use std::str::FromStr;
 
-            let code_hash = ckb_types::H256::from_str(&usdi_config.code_hash)
+            let code_hash = ckb_types::H256::from_str(usdi_config.code_hash.trim_start_matches("0x"))
                 .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
             let args = ckb_types::bytes::Bytes::from(
                 hex::decode(usdi_config.args.trim_start_matches("0x"))
