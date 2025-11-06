@@ -31,6 +31,13 @@ struct ChannelInfo {
     spillman_lock_script_hash: String,
     funding_tx_hash: String,
     funding_output_index: u32,
+    // xUDT fields (optional, only present in xUDT channels)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(dead_code)]
+    xudt_type_script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(dead_code)]
+    xudt_amount: Option<String>,
 }
 
 pub async fn execute(

@@ -21,6 +21,11 @@ struct ChannelInfo {
     spillman_lock_script_hash: String,
     funding_tx_hash: String,
     funding_output_index: u32,
+    // xUDT fields (optional, only present in xUDT channels)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    xudt_type_script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    xudt_amount: Option<String>,  // Store as string to avoid u128 parsing issues
 }
 
 pub async fn execute(
@@ -206,6 +211,8 @@ pub async fn execute(
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
+        xudt_type_script: None,  // TODO: Will be filled in xUDT mode
+        xudt_amount: None,       // TODO: Will be filled in xUDT mode
     };
 
     let channel_info_json = serde_json::to_string_pretty(&channel_info)?;
@@ -425,6 +432,8 @@ pub async fn execute_v2(
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
+        xudt_type_script: None,  // TODO: Will be filled in xUDT mode
+        xudt_amount: None,       // TODO: Will be filled in xUDT mode
     };
 
     let channel_info_json = serde_json::to_string_pretty(&channel_info)?;

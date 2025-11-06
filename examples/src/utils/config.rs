@@ -10,6 +10,8 @@ pub struct Config {
     pub channel: ChannelConfig,
     pub spillman_lock: SpillmanLockConfig,
     pub auth: AuthConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usdi: Option<XudtConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -56,6 +58,15 @@ pub struct SpillmanLockConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AuthConfig {
+    pub tx_hash: String,
+    pub index: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct XudtConfig {
+    pub code_hash: String,
+    pub hash_type: String,
+    pub args: String,
     pub tx_hash: String,
     pub index: u32,
 }

@@ -27,10 +27,23 @@ ckb-cli --url https://testnet.ckb.dev deploy gen-txs \
 
 echo ""
 echo "=== Step 2: Broadcast transactions to chain ==="
-ckb-cli --url https://testnet.ckb.dev deploy apply-txs \
+APPLY_OUTPUT=$(ckb-cli --url https://testnet.ckb.dev deploy apply-txs \
     --info-file testnet.json \
-    --migration-dir ./migrations
+    --migration-dir ./migrations 2>&1)
+
+echo "$APPLY_OUTPUT"
+
+# Extract transaction hash from "cell_tx: 0x..." line
+TX_HASH=$(echo "$APPLY_OUTPUT" | grep "cell_tx:" | grep -oE '0x[a-fA-F0-9]{64}')
 
 echo ""
 echo "=== Deployment completed! ==="
 echo "Check testnet.json for contract details"
+
+if [ -n "$TX_HASH" ]; then
+    echo ""
+    echo "查询交易状态:"
+    echo "  ckb-cli --url https://testnet.ckb.dev rpc get_transaction --hash $TX_HASH"
+fi
+
+

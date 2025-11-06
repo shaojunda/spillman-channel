@@ -402,9 +402,9 @@ struct SpillmanWitness {
   - [x] refund (Legacy multisig)
   - [x] settle(Legacy multisig)
 - [ ] **xUDT 通道支持**：支持用户自定义代币（xUDT）的支付通道
-  - 需要扩展 Spillman Lock 合约支持 xUDT
-  - 需要更新交易构造逻辑处理 xUDT cells
-  - 需要更新 commitment 和 refund 逻辑支持 xUDT 转账
+  - [x] 需要扩展 Spillman Lock 合约支持 xUDT 校验
+  - [ ] 需要更新交易构造逻辑处理 xUDT cells
+  - [ ] 需要更新 funding, commitment 和 refund 逻辑支持 xUDT 转账
 
 ---
 
