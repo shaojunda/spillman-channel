@@ -69,6 +69,7 @@ pub struct XudtConfig {
     pub args: String,
     pub tx_hash: String,
     pub index: u32,
+    pub decimal: u8,
 }
 
 impl KeyConfig {

@@ -392,6 +392,21 @@ pub async fn execute_v2(
     let capacity_human = HumanCapacity::from_str(&capacity.to_string())
         .map_err(|e| anyhow!("Failed to parse capacity: {}", e))?;
 
+    // Convert xUDT amount to smallest unit (apply decimal)
+    let xudt_amount_smallest_unit = if let Some(amount) = xudt_amount {
+        if let Some(ref usdi_config) = config.usdi {
+            let decimal = usdi_config.decimal;
+            let multiplier = 10u128.pow(decimal as u32);
+            let smallest_unit = amount * multiplier;
+            println!("  - xUDT amount: {} (decimal: {}, smallest unit: {})", amount, decimal, smallest_unit);
+            Some(smallest_unit)
+        } else {
+            return Err(anyhow!("xUDT amount specified but usdi config not found"));
+        }
+    } else {
+        None
+    };
+
     let (funding_tx_hash, funding_output_index) = if co_fund {
         // Co-fund mode: User + Merchant共同出资
         let merchant_addr = merchant_address.unwrap_or(&config.merchant.address);
@@ -399,8 +414,8 @@ pub async fn execute_v2(
             .map_err(|e| anyhow!("invalid merchant address: {}", e))?;
 
         // For co-funding with xUDT: merchant contributes 0 xUDT, user contributes all
-        let user_xudt_amount = xudt_amount;
-        let merchant_xudt_amount = if xudt_amount.is_some() { Some(0u128) } else { None };
+        let user_xudt_amount = xudt_amount_smallest_unit;
+        let merchant_xudt_amount = if xudt_amount_smallest_unit.is_some() { Some(0u128) } else { None };
 
         funding_v2::build_cofund_funding_transaction(
             &config,
@@ -423,7 +438,7 @@ pub async fn execute_v2(
             capacity_human,
             fee_rate,
             funding_info_path,
-            xudt_amount,
+            xudt_amount_smallest_unit,
         )
         .await?
     };

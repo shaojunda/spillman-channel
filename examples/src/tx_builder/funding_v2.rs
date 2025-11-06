@@ -71,6 +71,7 @@ use std::str::FromStr;
 
 use crate::utils::config::Config;
 use ckb_hash::blake2b_256;
+use ckb_sdk::traits::ValueRangeOption;
 
 /// Funding request parameters
 pub struct FundingRequest {
@@ -424,26 +425,34 @@ impl FundingTxBuilder {
 
         let type_script = self.request.xudt_type_script.as_ref()
             .ok_or_else(|| anyhow!("xUDT amount specified but no type script"))?;
-
-        println!("  - Collecting xUDT cells for amount: {}", xudt_amount);
-
-        // Collect xUDT cells
+        // Collect all cells with matching lock script
         use ckb_sdk::traits::CellQueryOptions;
-        let query = CellQueryOptions::new_lock(self.context.funding_source_lock_script.clone());
-        let (cells, _total_capacity) = cell_collector.collect_live_cells(&query, false)?;
+        let mut query = CellQueryOptions::new_lock(self.context.funding_source_lock_script.clone());
+        query.secondary_script = Some(type_script.clone());
+        query.data_len_range = Some(ValueRangeOption::new_min(16));
+        let (cells, _) = cell_collector.collect_live_cells(&query, false)?;
+
+        println!("  - Found {} cells with matching lock script", cells.len());
 
         // Filter cells with matching type script and collect xUDT amounts
         let mut xudt_inputs = vec![];
         let mut collected_xudt_amount = 0u128;
+        let mut cells_with_type = 0;
+        let mut cells_without_type = 0;
+
+        println!("  - Cells: {:?}", cells.len());
 
         for cell in cells {
             // Check if cell has the matching type script
             if let Some(cell_type) = cell.output.type_().to_opt() {
+                cells_with_type += 1;
+
                 if cell_type.as_slice() == type_script.as_slice() {
                     // Parse xUDT amount from cell data
                     let data_bytes = cell.output_data.to_vec();
                     if data_bytes.len() >= 16 {
                         let amount = u128::from_le_bytes(data_bytes[0..16].try_into().unwrap());
+                        println!("  - ✓ Found matching xUDT cell with amount: {}", amount);
                         collected_xudt_amount += amount;
                         xudt_inputs.push(cell);
 
@@ -451,9 +460,16 @@ impl FundingTxBuilder {
                             break;
                         }
                     }
+                } else {
+                    println!("  - ✗ Type script doesn't match");
                 }
+            } else {
+                cells_without_type += 1;
             }
         }
+
+        println!("  - Summary: {} cells with type script, {} cells without type script",
+            cells_with_type, cells_without_type);
 
         if collected_xudt_amount < xudt_amount {
             return Err(anyhow!(
@@ -472,14 +488,28 @@ impl FundingTxBuilder {
         let mut inputs: Vec<_> = base_tx.inputs().into_iter().collect();
         let mut outputs: Vec<_> = base_tx.outputs().into_iter().collect();
         let mut outputs_data: Vec<_> = base_tx.outputs_data().into_iter().collect();
+        let mut witnesses: Vec<_> = base_tx.witnesses().into_iter().collect();
 
-        // Add xUDT inputs
+        // Determine witness placeholder size
+        let witness_placeholder = if let Some(ref config) = self.context.multisig_config {
+            // For multisig: use SDK's placeholder_witness() method
+            config.placeholder_witness()
+        } else {
+            // For single-sig: 65 bytes signature
+            WitnessArgs::new_builder()
+                .lock(Some(molecule::bytes::Bytes::from(vec![0u8; 65])).pack())
+                .build()
+        };
+
+        // Add xUDT inputs and their witness placeholders
         for cell in &xudt_inputs {
             inputs.push(
                 ckb_types::packed::CellInput::new_builder()
                     .previous_output(cell.out_point.clone())
                     .build()
             );
+            // Add witness placeholder for this input
+            witnesses.push(witness_placeholder.as_bytes().pack());
         }
 
         // Add xUDT change output if needed
@@ -508,11 +538,12 @@ impl FundingTxBuilder {
             outputs_data.push(change_data.pack());
         }
 
-        // Rebuild transaction
+        // Rebuild transaction with witnesses
         let tx = base_tx.as_advanced_builder()
             .set_inputs(inputs)
             .set_outputs(outputs)
             .set_outputs_data(outputs_data)
+            .set_witnesses(witnesses)
             .build();
 
         Ok(tx)
@@ -715,13 +746,6 @@ pub async fn build_funding_transaction(
                     .map_err(|e| anyhow!("Invalid args hex: {}", e))?
             );
 
-            let hash_type = match usdi_config.hash_type.as_str() {
-                "type" => ScriptHashType::Type,
-                "data" => ScriptHashType::Data,
-                "data1" => ScriptHashType::Data1,
-                _ => return Err(anyhow!("Invalid hash_type: {}", usdi_config.hash_type)),
-            };
-
             let type_script = Script::new_builder()
                 .code_hash(code_hash.pack())
                 .hash_type(ckb_types::packed::Byte::new(ScriptHashType::Type as u8))
@@ -881,13 +905,6 @@ pub async fn build_cofund_funding_transaction(
                 hex::decode(usdi_config.args.trim_start_matches("0x"))
                     .map_err(|e| anyhow!("Invalid args hex: {}", e))?
             );
-
-            let hash_type = match usdi_config.hash_type.as_str() {
-                "type" => ScriptHashType::Type,
-                "data" => ScriptHashType::Data,
-                "data1" => ScriptHashType::Data1,
-                _ => return Err(anyhow!("Invalid hash_type: {}", usdi_config.hash_type)),
-            };
 
             let type_script = Script::new_builder()
                 .code_hash(code_hash.pack())
