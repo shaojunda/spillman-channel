@@ -253,6 +253,7 @@ pub async fn execute_v2(
     fee_rate: u64,
     co_fund: bool,
     broadcast: bool,
+    xudt_amount: Option<u128>,
 ) -> Result<()> {
     println!("🚀 执行 set-up 命令 - 准备 Spillman Channel (v2)");
     println!("==========================================\n");
@@ -397,6 +398,10 @@ pub async fn execute_v2(
         let merchant_addr_parsed = Address::from_str(merchant_addr)
             .map_err(|e| anyhow!("invalid merchant address: {}", e))?;
 
+        // For co-funding with xUDT: merchant contributes 0 xUDT, user contributes all
+        let user_xudt_amount = xudt_amount;
+        let merchant_xudt_amount = if xudt_amount.is_some() { Some(0u128) } else { None };
+
         funding_v2::build_cofund_funding_transaction(
             &config,
             &user_addr_parsed,
@@ -405,6 +410,8 @@ pub async fn execute_v2(
             &spillman_lock_script,
             fee_rate,
             funding_info_path,
+            user_xudt_amount,
+            merchant_xudt_amount,
         )
         .await?
     } else {
@@ -416,12 +423,49 @@ pub async fn execute_v2(
             capacity_human,
             fee_rate,
             funding_info_path,
+            xudt_amount,
         )
         .await?
     };
 
     // 6. Save channel info with actual funding tx info
     println!("\n💾 保存通道信息...");
+
+    // Build xUDT type script hash if xUDT channel
+    let xudt_type_script_str = if xudt_amount.is_some() {
+        if let Some(ref usdi_config) = config.usdi {
+            use ckb_types::core::ScriptHashType;
+            use ckb_types::prelude::*;
+            use std::str::FromStr;
+
+            let code_hash = ckb_types::H256::from_str(&usdi_config.code_hash)
+                .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
+            let args = ckb_types::bytes::Bytes::from(
+                hex::decode(usdi_config.args.trim_start_matches("0x"))
+                    .map_err(|e| anyhow!("Invalid args hex: {}", e))?
+            );
+
+            let hash_type = match usdi_config.hash_type.as_str() {
+                "type" => ScriptHashType::Type,
+                "data" => ScriptHashType::Data,
+                "data1" => ScriptHashType::Data1,
+                _ => return Err(anyhow!("Invalid hash_type: {}", usdi_config.hash_type)),
+            };
+
+            let type_script = ckb_types::packed::Script::new_builder()
+                .code_hash(code_hash.pack())
+                .hash_type(ckb_types::packed::Byte::new(hash_type as u8))
+                .args(args.pack())
+                .build();
+
+            Some(format!("{:#x}", type_script.calc_script_hash()))
+        } else {
+            return Err(anyhow!("xUDT amount provided but usdi config not found"));
+        }
+    } else {
+        None
+    };
+
     let channel_info = ChannelInfo {
         user_address: user_address.to_string(),
         merchant_address: merchant_address.unwrap_or(&config.merchant.address).to_string(),
@@ -432,8 +476,8 @@ pub async fn execute_v2(
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
-        xudt_type_script: None,  // TODO: Will be filled in xUDT mode
-        xudt_amount: None,       // TODO: Will be filled in xUDT mode
+        xudt_type_script: xudt_type_script_str,
+        xudt_amount: xudt_amount.map(|amt| amt.to_string()),
     };
 
     let channel_info_json = serde_json::to_string_pretty(&channel_info)?;

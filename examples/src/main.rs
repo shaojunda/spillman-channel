@@ -54,6 +54,10 @@ enum Commands {
         /// 是否自动广播交易到链上（默认不广播，需要明确指定）
         #[arg(long)]
         broadcast: bool,
+
+        /// xUDT amount (for xUDT channels, optional)
+        #[arg(long)]
+        xudt_amount: Option<u128>,
     },
 
     /// 签名交易
@@ -140,6 +144,7 @@ async fn main() -> Result<()> {
             co_fund,
             use_v2,
             broadcast,
+            xudt_amount,
         } => {
             if use_v2 {
                 // Use v2 implementation (funding_v2)
@@ -152,6 +157,7 @@ async fn main() -> Result<()> {
                     fee_rate,
                     co_fund,
                     broadcast,
+                    xudt_amount,
                 )
                 .await?;
             } else {

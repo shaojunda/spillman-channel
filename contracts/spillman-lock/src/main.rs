@@ -28,7 +28,7 @@ use ckb_std::{
     error::SysError,
     high_level::{
         load_cell, load_cell_capacity, load_cell_data, load_cell_occupied_capacity,
-        load_input_since, load_script, load_transaction, load_witness, spawn_cell, QueryIter,
+        load_input_since,load_cell_type, load_script, load_transaction, load_witness, spawn_cell, QueryIter,
     },
     since::Since,
     syscalls::wait,
@@ -471,25 +471,22 @@ fn verify_commitment_output_structure(
     }
 
     // Verify type script consistency for xUDT channels
-    let input = load_cell(0, Source::GroupInput)?;
-    let input_type = input.type_().to_opt();
+    let type_script = load_cell_type(0, Source::GroupInput)?;
     let user_output_type = user_output.type_().to_opt();
     let merchant_output_type = merchant_output.type_().to_opt();
 
     // If input has type script, both outputs must have the same type script
-    if let Some(input_t) = input_type {
-        let input_type_hash = input_t.calc_script_hash();
-
+    if let Some(input_t) = type_script {
         // Verify user output type script
         match user_output_type {
-            Some(user_t) if user_t.calc_script_hash() == input_type_hash => {}
-            _ => return Err(Error::TypeScriptMismatch),
+            Some(user_t) if user_t != input_t => {return Err(Error::TypeScriptMismatch)}
+            _ => {},
         }
 
         // Verify merchant output type script
         match merchant_output_type {
-            Some(merchant_t) if merchant_t.calc_script_hash() == input_type_hash => {}
-            _ => return Err(Error::TypeScriptMismatch),
+            Some(merchant_t) if merchant_t != input_t => {return Err(Error::TypeScriptMismatch)}
+            _ => {},
         }
     } else {
         // If input has no type script, outputs should not have type script either
