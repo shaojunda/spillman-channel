@@ -201,13 +201,22 @@ impl FundingTx {
 
         // Register MULTISIG unlocker if merchant is using multisig
         if let Some(config) = multisig_config {
-            // Use the SDK's MultisigConfig directly
-            let multisig_unlocker =
-                SecpMultisigUnlocker::from((Box::new(signer) as Box<_>, config));
-            let multisig_script_id = MultisigScript::V2.script_id();
+            // Register Legacy multisig unlocker
+            let legacy_multisig_unlocker =
+                SecpMultisigUnlocker::from((Box::new(signer.clone()) as Box<_>, config.clone()));
+            let legacy_script_id = MultisigScript::Legacy.script_id();
             unlockers.insert(
-                multisig_script_id,
-                Box::new(multisig_unlocker) as Box<dyn ScriptUnlocker>,
+                legacy_script_id,
+                Box::new(legacy_multisig_unlocker) as Box<dyn ScriptUnlocker>,
+            );
+
+            // Register V2 multisig unlocker
+            let v2_multisig_unlocker =
+                SecpMultisigUnlocker::from((Box::new(signer) as Box<_>, config));
+            let v2_script_id = MultisigScript::V2.script_id();
+            unlockers.insert(
+                v2_script_id,
+                Box::new(v2_multisig_unlocker) as Box<dyn ScriptUnlocker>,
             );
         }
 
@@ -648,15 +657,49 @@ pub async fn build_cofund_funding_transaction(
     let user_secret_keys = config.user.get_secret_keys()?;
     let merchant_secret_keys = config.merchant.get_secret_keys()?;
 
-    // Build multisig configs if needed
+    // Build multisig configs if needed (detect type from address)
     let user_multisig_config = if let Some((threshold, total)) = config.user.get_multisig_config() {
-        Some(build_multisig_config(&user_secret_keys, threshold, total)?)
+        // Detect user's multisig type from address
+        let user_lock_script = Script::from(user_address);
+        let code_hash: H256 = user_lock_script.code_hash().unpack();
+
+        let legacy_script_id = MultisigScript::Legacy.script_id();
+        let v2_script_id = MultisigScript::V2.script_id();
+
+        let multisig_type = if code_hash == legacy_script_id.code_hash
+            && user_lock_script.hash_type() == legacy_script_id.hash_type.into() {
+            MultisigScript::Legacy
+        } else if code_hash == v2_script_id.code_hash
+            && user_lock_script.hash_type() == v2_script_id.hash_type.into() {
+            MultisigScript::V2
+        } else {
+            return Err(anyhow!("Unknown multisig type for user address"));
+        };
+
+        Some(build_multisig_config_with_type(&user_secret_keys, threshold, total, multisig_type)?)
     } else {
         None
     };
 
     let merchant_multisig_config = if let Some((threshold, total)) = config.merchant.get_multisig_config() {
-        Some(build_multisig_config(&merchant_secret_keys, threshold, total)?)
+        // Detect merchant's multisig type from address
+        let merchant_lock_script = Script::from(merchant_address);
+        let code_hash: H256 = merchant_lock_script.code_hash().unpack();
+
+        let legacy_script_id = MultisigScript::Legacy.script_id();
+        let v2_script_id = MultisigScript::V2.script_id();
+
+        let multisig_type = if code_hash == legacy_script_id.code_hash
+            && merchant_lock_script.hash_type() == legacy_script_id.hash_type.into() {
+            MultisigScript::Legacy
+        } else if code_hash == v2_script_id.code_hash
+            && merchant_lock_script.hash_type() == v2_script_id.hash_type.into() {
+            MultisigScript::V2
+        } else {
+            return Err(anyhow!("Unknown multisig type for merchant address"));
+        };
+
+        Some(build_multisig_config_with_type(&merchant_secret_keys, threshold, total, multisig_type)?)
     } else {
         None
     };
@@ -842,7 +885,7 @@ mod tests {
 
 /// 构建多签配置的辅助函数
 ///
-/// 根据私钥列表构建 SDK 的 MultisigConfig
+/// 根据私钥列表构建 SDK 的 MultisigConfig（默认使用 V2）
 ///
 /// # Arguments
 /// * `secret_keys` - 私钥列表（长度必须等于 total）
@@ -855,6 +898,25 @@ pub fn build_multisig_config(
     secret_keys: &[secp256k1::SecretKey],
     threshold: u8,
     total: u8,
+) -> Result<SdkMultisigConfig> {
+    build_multisig_config_with_type(secret_keys, threshold, total, MultisigScript::V2)
+}
+
+/// 根据私钥列表和指定类型构建 SDK 的 MultisigConfig
+///
+/// # Arguments
+/// * `secret_keys` - 私钥列表（长度必须等于 total）
+/// * `threshold` - M: 需要多少个签名
+/// * `total` - N: 总共多少个公钥
+/// * `multisig_type` - MultisigScript::Legacy 或 MultisigScript::V2
+///
+/// # Returns
+/// * `SdkMultisigConfig` - SDK 的 MultisigConfig，可以直接调用 placeholder_witness() 等方法
+pub fn build_multisig_config_with_type(
+    secret_keys: &[secp256k1::SecretKey],
+    threshold: u8,
+    total: u8,
+    multisig_type: MultisigScript,
 ) -> Result<SdkMultisigConfig> {
     if secret_keys.len() != total as usize {
         return Err(anyhow!(
@@ -885,7 +947,7 @@ pub fn build_multisig_config(
 
     // 使用 SDK 的 MultisigConfig::new_with 构建
     Ok(SdkMultisigConfig::new_with(
-        MultisigScript::V2,
+        multisig_type,
         sighash_addresses,
         0, // require_first_n: 0 means any M of N
         threshold,

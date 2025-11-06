@@ -57,6 +57,17 @@ ckb-cli account new
 
 # Generate merchant account
 ckb-cli account new
+
+
+# Generate merchant multisig address
+# Note: The legacy multisig code hash is deprecated, but still available. It is recommended to use the V2  code hash where possible.
+ckb-cli tx build-multisig-address \
+  --require-first-n 0 \
+  --threshold 2 \
+  --multisig-code-hash legacy \
+  --sighash-address ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2ywhxwd3qxqv7fzsd9xz8gvusey9f6xkqcpf7m9 \
+  --sighash-address ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqv48mx3fuyhnyphvpj0kp2dvdpuzp9982sg44uve \
+  --sighash-address ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8rpp4jutaxzd2xytprghha4yytg9rhqcdusxf0
 ```
 
 ## 🚀 Quick Start

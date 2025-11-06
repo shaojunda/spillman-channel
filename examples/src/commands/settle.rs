@@ -1,18 +1,23 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
-use ckb_sdk::rpc::CkbRpcClient;
+use ckb_sdk::{
+    constants::MultisigScript,
+    rpc::CkbRpcClient,
+    Address, ScriptId,
+};
 use ckb_types::{
     bytes::Bytes,
     core::TransactionView,
-    packed::CellDepVec,
+    packed::{CellDepVec, Script as PackedScript},
     prelude::*,
+    H256,
 };
-use std::fs;
+use std::{fs, str::FromStr};
 
 use crate::{
     utils::config::load_config,
-    tx_builder::funding_v2::build_multisig_config,
+    tx_builder::funding_v2::build_multisig_config_with_type,
     tx_builder::witness_utils::{EMPTY_WITNESS_ARGS_SIZE, UNLOCK_TYPE_SIZE, SIGNATURE_SIZE},
 };
 
@@ -61,8 +66,29 @@ pub async fn execute(
         let keys = parsed_keys?;
         println!("  - 已加载 {} 个私钥", keys.len());
 
-        // Build multisig config
-        let multisig_config = build_multisig_config(&keys, threshold, total)?;
+        // Detect merchant address type (Legacy or V2)
+        let merchant_address = Address::from_str(&config.merchant.address)
+            .map_err(|e| anyhow!("Failed to parse merchant address: {}", e))?;
+        let merchant_lock_script = PackedScript::from(&merchant_address);
+        let code_hash: H256 = merchant_lock_script.code_hash().unpack();
+
+        let legacy_script_id = MultisigScript::Legacy.script_id();
+        let v2_script_id = MultisigScript::V2.script_id();
+
+        let multisig_type = if code_hash == legacy_script_id.code_hash
+            && merchant_lock_script.hash_type() == legacy_script_id.hash_type.into() {
+            println!("  - 检测到 Legacy multisig 地址");
+            MultisigScript::Legacy
+        } else if code_hash == v2_script_id.code_hash
+            && merchant_lock_script.hash_type() == v2_script_id.hash_type.into() {
+            println!("  - 检测到 V2 multisig 地址");
+            MultisigScript::V2
+        } else {
+            return Err(anyhow!("Unknown multisig type for merchant address"));
+        };
+
+        // Build multisig config with detected type
+        let multisig_config = build_multisig_config_with_type(&keys, threshold, total, multisig_type)?;
         println!("  - 多签配置: {}-of-{}", multisig_config.threshold(), multisig_config.sighash_addresses().len());
 
         (Some(multisig_config), keys)
