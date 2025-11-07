@@ -108,6 +108,8 @@ pub struct RefundRequest {
     pub merchant_lock_script: Option<Script>,
     /// Fee rate in shannon/KB
     pub fee_rate: u64,
+    /// xUDT cell dep (optional, for xUDT channels)
+    pub xudt_cell_dep: Option<CellDep>,
 }
 
 /// Refund context (keys and RPC)
@@ -338,6 +340,29 @@ impl TxBuilder for RefundTxBuilder {
 
         let spillman_capacity: u64 = spillman_cell.capacity().unpack();
 
+        // Check if this is an xUDT channel
+        let xudt_info = if let Some(type_script) = spillman_cell.type_().to_opt() {
+            // Extract xUDT amount from funding cell data
+            let funding_data = self.request.funding_tx
+                .outputs_data()
+                .get(0)
+                .ok_or_else(|| TxBuilderError::Other(anyhow!("Funding transaction has no output data 0")))?;
+            let data_bytes: Vec<u8> = funding_data.unpack();
+
+            if data_bytes.len() >= 16 {
+                let xudt_amount = u128::from_le_bytes(
+                    data_bytes[0..16]
+                        .try_into()
+                        .map_err(|_| TxBuilderError::Other(anyhow!("Failed to parse xUDT amount")))?
+                );
+                Some((type_script, xudt_amount))
+            } else {
+                return Err(TxBuilderError::Other(anyhow!("Invalid xUDT data length: {}", data_bytes.len())));
+            }
+        } else {
+            None
+        };
+
         // Parse timeout_since from Spillman Lock args
         let lock_script = spillman_cell.lock();
         let args_bytes: Bytes = lock_script.args().unpack();
@@ -368,13 +393,21 @@ impl TxBuilder for RefundTxBuilder {
 
         // Calculate merchant's capacity if co-fund
         let merchant_capacity = if let Some(ref merchant_lock) = self.request.merchant_lock_script {
-            let merchant_cell = CellOutput::new_builder()
+            let mut merchant_cell_builder = CellOutput::new_builder()
                 .capacity(Capacity::shannons(0))
-                .lock(merchant_lock.clone())
-                .build();
+                .lock(merchant_lock.clone());
 
+            // If xUDT channel, merchant cell also needs type script
+            let data_size = if let Some((ref type_script, _)) = xudt_info {
+                merchant_cell_builder = merchant_cell_builder.type_(Some(type_script.clone()).pack());
+                16  // 16 bytes for xUDT data
+            } else {
+                0
+            };
+
+            let merchant_cell = merchant_cell_builder.build();
             merchant_cell
-                .occupied_capacity(Capacity::bytes(0).unwrap())
+                .occupied_capacity(Capacity::bytes(data_size).unwrap())
                 .unwrap()
                 .as_u64()
         } else {
@@ -396,34 +429,71 @@ impl TxBuilder for RefundTxBuilder {
         };
 
         // Build outputs
-        let mut outputs = vec![
-            CellOutput::new_builder()
+        let mut outputs = vec![];
+        let mut outputs_data = vec![];
+
+        // User output (with xUDT if applicable)
+        if let Some((ref type_script, xudt_amount)) = xudt_info {
+            // xUDT channel: user gets all xUDT back
+            let output = CellOutput::new_builder()
                 .capacity(Capacity::shannons(user_capacity))
                 .lock(self.request.user_lock_script.clone())
-                .build(),
-        ];
+                .type_(Some(type_script.clone()).pack())
+                .build();
+            outputs.push(output);
 
-        let mut outputs_data = vec![Bytes::new().pack()];
+            // xUDT amount in data (16 bytes, little-endian u128)
+            outputs_data.push(Bytes::from(xudt_amount.to_le_bytes().to_vec()).pack());
+        } else {
+            // Regular CKB channel
+            let output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(user_capacity))
+                .lock(self.request.user_lock_script.clone())
+                .build();
+            outputs.push(output);
+            outputs_data.push(Bytes::new().pack());
+        }
 
+        // Merchant output (co-fund mode)
         if let Some(ref merchant_lock) = self.request.merchant_lock_script {
-            outputs.push(
-                CellOutput::new_builder()
+            if let Some((ref type_script, _)) = xudt_info {
+                // xUDT channel: merchant output also needs type script with 0 amount
+                let output = CellOutput::new_builder()
                     .capacity(Capacity::shannons(merchant_capacity))
                     .lock(merchant_lock.clone())
-                    .build(),
-            );
-            outputs_data.push(Bytes::new().pack());
+                    .type_(Some(type_script.clone()).pack())
+                    .build();
+                outputs.push(output);
+                // Merchant gets 0 xUDT (only CKB refund)
+                outputs_data.push(Bytes::from(0u128.to_le_bytes().to_vec()).pack());
+            } else {
+                // Regular CKB channel
+                outputs.push(
+                    CellOutput::new_builder()
+                        .capacity(Capacity::shannons(merchant_capacity))
+                        .lock(merchant_lock.clone())
+                        .build(),
+                );
+                outputs_data.push(Bytes::new().pack());
+            }
         }
 
         // Build witness placeholder (size depends on merchant's signature type)
         let witness_size = calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
         let witness_placeholder = vec![0u8; witness_size];
 
-        let tx = Transaction::default()
+        let mut tx_builder = Transaction::default()
             .as_advanced_builder()
             .input(input)
             .cell_dep(self.context.spillman_lock_dep.clone())
-            .cell_dep(self.context.auth_dep.clone())
+            .cell_dep(self.context.auth_dep.clone());
+
+        // Add xUDT cell dep if this is an xUDT channel
+        if let Some(ref xudt_cell_dep) = self.request.xudt_cell_dep {
+            tx_builder = tx_builder.cell_dep(xudt_cell_dep.clone());
+        }
+
+        let tx = tx_builder
             .set_outputs(outputs)
             .set_outputs_data(outputs_data)
             .witness(Bytes::from(witness_placeholder).pack())
@@ -443,15 +513,27 @@ impl RefundTxBuilder {
             .ok_or_else(|| anyhow!("Funding transaction has no output 0"))?;
         let spillman_capacity: u64 = spillman_cell.capacity().unpack();
 
+        // Check if this is an xUDT channel
+        let has_xudt = spillman_cell.type_().to_opt().is_some();
+
         // Calculate merchant's capacity if co-fund
         let merchant_capacity = if let Some(ref merchant_lock) = self.request.merchant_lock_script {
-            let merchant_cell = CellOutput::new_builder()
+            let mut merchant_cell_builder = CellOutput::new_builder()
                 .capacity(Capacity::shannons(0))
-                .lock(merchant_lock.clone())
-                .build();
+                .lock(merchant_lock.clone());
 
+            // If xUDT channel, merchant cell also needs type script
+            let data_size = if has_xudt {
+                let type_script = spillman_cell.type_().to_opt().unwrap();
+                merchant_cell_builder = merchant_cell_builder.type_(Some(type_script).pack());
+                16  // 16 bytes for xUDT data
+            } else {
+                0
+            };
+
+            let merchant_cell = merchant_cell_builder.build();
             merchant_cell
-                .occupied_capacity(Capacity::bytes(0).unwrap())
+                .occupied_capacity(Capacity::bytes(data_size).unwrap())
                 .unwrap()
                 .as_u64()
         } else {
@@ -512,6 +594,29 @@ impl RefundTxBuilder {
             .get(0)
             .ok_or_else(|| anyhow!("Funding transaction has no output 0"))?;
 
+        // Check if this is an xUDT channel
+        let xudt_info = if let Some(type_script) = spillman_cell.type_().to_opt() {
+            // Extract xUDT amount from funding cell data
+            let funding_data = self.request.funding_tx
+                .outputs_data()
+                .get(0)
+                .ok_or_else(|| anyhow!("Funding transaction has no output data 0"))?;
+            let data_bytes: Vec<u8> = funding_data.unpack();
+
+            if data_bytes.len() >= 16 {
+                let xudt_amount = u128::from_le_bytes(
+                    data_bytes[0..16]
+                        .try_into()
+                        .map_err(|_| anyhow!("Failed to parse xUDT amount"))?
+                );
+                Some((type_script, xudt_amount))
+            } else {
+                return Err(anyhow!("Invalid xUDT data length: {}", data_bytes.len()));
+            }
+        } else {
+            None
+        };
+
         let lock_script = spillman_cell.lock();
         let args_bytes: Bytes = lock_script.args().unpack();
 
@@ -531,33 +636,70 @@ impl RefundTxBuilder {
             .since(timeout_since)
             .build();
 
-        let mut outputs = vec![
-            CellOutput::new_builder()
+        let mut outputs = vec![];
+        let mut outputs_data = vec![];
+
+        // User output (with xUDT if applicable)
+        if let Some((ref type_script, xudt_amount)) = xudt_info {
+            // xUDT channel: user gets all xUDT back
+            let output = CellOutput::new_builder()
                 .capacity(Capacity::shannons(user_capacity))
                 .lock(self.request.user_lock_script.clone())
-                .build(),
-        ];
+                .type_(Some(type_script.clone()).pack())
+                .build();
+            outputs.push(output);
 
-        let mut outputs_data = vec![Bytes::new().pack()];
+            // xUDT amount in data (16 bytes, little-endian u128)
+            outputs_data.push(Bytes::from(xudt_amount.to_le_bytes().to_vec()).pack());
+        } else {
+            // Regular CKB channel
+            let output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(user_capacity))
+                .lock(self.request.user_lock_script.clone())
+                .build();
+            outputs.push(output);
+            outputs_data.push(Bytes::new().pack());
+        }
 
+        // Merchant output (co-fund mode)
         if let Some(ref merchant_lock) = self.request.merchant_lock_script {
-            outputs.push(
-                CellOutput::new_builder()
+            if let Some((ref type_script, _)) = xudt_info {
+                // xUDT channel: merchant output also needs type script with 0 amount
+                let output = CellOutput::new_builder()
                     .capacity(Capacity::shannons(merchant_capacity))
                     .lock(merchant_lock.clone())
-                    .build(),
-            );
-            outputs_data.push(Bytes::new().pack());
+                    .type_(Some(type_script.clone()).pack())
+                    .build();
+                outputs.push(output);
+                // Merchant gets 0 xUDT (only CKB refund)
+                outputs_data.push(Bytes::from(0u128.to_le_bytes().to_vec()).pack());
+            } else {
+                // Regular CKB channel
+                outputs.push(
+                    CellOutput::new_builder()
+                        .capacity(Capacity::shannons(merchant_capacity))
+                        .lock(merchant_lock.clone())
+                        .build(),
+                );
+                outputs_data.push(Bytes::new().pack());
+            }
         }
 
         let witness_size = calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
         let witness_placeholder = vec![0u8; witness_size];
 
-        let tx = Transaction::default()
+        let mut tx_builder = Transaction::default()
             .as_advanced_builder()
             .input(input)
             .cell_dep(self.context.spillman_lock_dep.clone())
-            .cell_dep(self.context.auth_dep.clone())
+            .cell_dep(self.context.auth_dep.clone());
+
+        // Add xUDT cell dep if this is an xUDT channel
+        if let Some(ref xudt_cell_dep) = self.request.xudt_cell_dep {
+            tx_builder = tx_builder.cell_dep(xudt_cell_dep.clone());
+        }
+
+        let tx = tx_builder
             .set_outputs(outputs)
             .set_outputs_data(outputs_data)
             .witness(Bytes::from(witness_placeholder).pack())
@@ -676,6 +818,26 @@ pub async fn build_refund_transaction(
         ));
     }
 
+    // Check if this is an xUDT channel and build xUDT cell dep if needed
+    let xudt_cell_dep = if spillman_cell.type_().to_opt().is_some() {
+        if let Some(ref usdi_config) = config.usdi {
+            let xudt_tx_hash = hex::decode(usdi_config.tx_hash.trim_start_matches("0x"))?;
+            let xudt_out_point = OutPoint::new_builder()
+                .tx_hash(ckb_types::packed::Byte32::from_slice(&xudt_tx_hash)?)
+                .index(usdi_config.index)
+                .build();
+            let xudt_dep = CellDep::new_builder()
+                .out_point(xudt_out_point)
+                .dep_type(DepType::Code)
+                .build();
+            Some(xudt_dep)
+        } else {
+            return Err(anyhow!("xUDT channel detected but usdi config not found"));
+        }
+    } else {
+        None
+    };
+
     // Create user secret key for RefundContext
     let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
     let user_privkey_bytes = hex::decode(user_privkey_hex.trim_start_matches("0x"))?;
@@ -687,6 +849,7 @@ pub async fn build_refund_transaction(
         user_lock_script,
         merchant_lock_script,
         fee_rate,
+        xudt_cell_dep,
     };
 
     // Clone merchant_multisig_config for later use in signing
