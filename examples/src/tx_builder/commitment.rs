@@ -71,6 +71,9 @@ const UNLOCK_TYPE_COMMITMENT: u8 = 0x00;
 /// * `merchant_min_capacity` - Merchant cell's minimum occupied capacity (in shannons)
 /// * `fee_rate` - Fee rate in shannons per KB (default: 1000)
 /// * `output_path` - Path to save the transaction JSON
+/// * `xudt_type_script` - Optional xUDT type script (for xUDT channels)
+/// * `xudt_total_amount` - Optional total xUDT amount in Spillman Lock cell
+/// * `xudt_payment_amount` - Optional xUDT amount to pay to merchant
 pub fn build_commitment_transaction(
     config: &Config,
     funding_tx_hash: H256,
@@ -83,6 +86,9 @@ pub fn build_commitment_transaction(
     merchant_min_capacity: u64,
     fee_rate: u64,
     output_path: &str,
+    xudt_type_script: Option<Script>,
+    xudt_total_amount: Option<u128>,
+    xudt_payment_amount: Option<u128>,
 ) -> Result<(H256, TransactionView)> {
     println!("📝 构建 Commitment 交易...");
 
@@ -144,6 +150,25 @@ pub fn build_commitment_transaction(
         .dep_type(DepType::Code)
         .build();
 
+    // Build xUDT cell dep if this is an xUDT channel
+    let xudt_cell_dep = if xudt_type_script.is_some() {
+        if let Some(ref usdi_config) = config.usdi {
+            let xudt_tx_hash = hex::decode(usdi_config.tx_hash.trim_start_matches("0x"))?;
+            let xudt_out_point = OutPoint::new_builder()
+                .tx_hash(ckb_types::packed::Byte32::from_slice(&xudt_tx_hash)?)
+                .index(usdi_config.index)
+                .build();
+            Some(CellDep::new_builder()
+                .out_point(xudt_out_point)
+                .dep_type(DepType::Code)
+                .build())
+        } else {
+            return Err(anyhow!("xUDT channel detected but usdi config not found"));
+        }
+    } else {
+        None
+    };
+
     // Build transaction with iterative fee calculation
     let (tx, actual_fee) = build_commitment_transaction_internal(
         spillman_lock_outpoint,
@@ -155,9 +180,13 @@ pub fn build_commitment_transaction(
         merchant_min_capacity,
         spillman_lock_dep,
         auth_dep,
+        xudt_cell_dep,
         &user_privkey,
         merchant_multisig_config.as_ref(),
         fee_rate,
+        xudt_type_script,
+        xudt_total_amount,
+        xudt_payment_amount,
     )?;
 
     let tx_hash = tx.hash();
@@ -201,9 +230,13 @@ fn build_commitment_transaction_internal(
     merchant_min_capacity: u64,
     spillman_lock_dep: CellDep,
     auth_dep: CellDep,
+    xudt_cell_dep: Option<CellDep>,
     user_privkey: &Privkey,
     merchant_multisig_config: Option<&MultisigConfig>,
     fee_rate: u64,
+    xudt_type_script: Option<Script>,
+    xudt_total_amount: Option<u128>,
+    xudt_payment_amount: Option<u128>,
 ) -> Result<(TransactionView, u64)> {
     // Calculate merchant's total capacity (payment + minimum occupied capacity)
     let merchant_total_capacity = payment_amount + merchant_min_capacity;
@@ -231,18 +264,46 @@ fn build_commitment_transaction_internal(
             .since(Uint64::from(0u64)) // No time lock for commitment path
             .build();
 
-        // Build outputs
-        // Output 0: User's address (change)
-        let user_output = CellOutput::new_builder()
-            .lock(user_lock_script.clone())
-            .capacity(Capacity::shannons(change_amount).pack())
-            .build();
+        // Build outputs with xUDT support
+        let (user_output, user_output_data, merchant_output, merchant_output_data) =
+            if let Some(ref type_script) = xudt_type_script {
+                // xUDT channel: add type script and xUDT amounts
+                let xudt_total = xudt_total_amount.ok_or_else(|| anyhow!("xUDT total amount required"))?;
+                let xudt_payment = xudt_payment_amount.ok_or_else(|| anyhow!("xUDT payment amount required"))?;
+                let xudt_change = xudt_total.checked_sub(xudt_payment)
+                    .ok_or_else(|| anyhow!("xUDT payment exceeds total amount"))?;
 
-        // Output 1: Merchant's address (payment + minimum occupied capacity)
-        let merchant_output = CellOutput::new_builder()
-            .lock(merchant_lock_script.clone())
-            .capacity(Capacity::shannons(merchant_total_capacity).pack())
-            .build();
+                // Output 0: User's address (change with xUDT)
+                let user_output = CellOutput::new_builder()
+                    .lock(user_lock_script.clone())
+                    .type_(Some(type_script.clone()).pack())
+                    .capacity(Capacity::shannons(change_amount).pack())
+                    .build();
+                let user_data = Bytes::from(xudt_change.to_le_bytes().to_vec());
+
+                // Output 1: Merchant's address (payment with xUDT)
+                let merchant_output = CellOutput::new_builder()
+                    .lock(merchant_lock_script.clone())
+                    .type_(Some(type_script.clone()).pack())
+                    .capacity(Capacity::shannons(merchant_total_capacity).pack())
+                    .build();
+                let merchant_data = Bytes::from(xudt_payment.to_le_bytes().to_vec());
+
+                (user_output, user_data, merchant_output, merchant_data)
+            } else {
+                // Regular CKB channel
+                let user_output = CellOutput::new_builder()
+                    .lock(user_lock_script.clone())
+                    .capacity(Capacity::shannons(change_amount).pack())
+                    .build();
+
+                let merchant_output = CellOutput::new_builder()
+                    .lock(merchant_lock_script.clone())
+                    .capacity(Capacity::shannons(merchant_total_capacity).pack())
+                    .build();
+
+                (user_output, Bytes::new(), merchant_output, Bytes::new())
+            };
 
         // Calculate merchant placeholder size based on multisig config
         let merchant_placeholder_size = crate::tx_builder::witness_utils::calculate_merchant_signature_size(merchant_multisig_config);
@@ -261,11 +322,16 @@ fn build_commitment_transaction_internal(
 
         let witness = Bytes::from(witness_data);
 
-        // Build cell_deps
-        let cell_deps = CellDepVec::new_builder()
+        // Build cell_deps with xUDT dep if needed
+        let mut cell_deps_builder = CellDepVec::new_builder()
             .push(spillman_lock_dep.clone())
-            .push(auth_dep.clone())
-            .build();
+            .push(auth_dep.clone());
+
+        if let Some(ref xudt_dep) = xudt_cell_dep {
+            cell_deps_builder = cell_deps_builder.push(xudt_dep.clone());
+        }
+
+        let cell_deps = cell_deps_builder.build();
 
         // Build transaction
         let tx = Transaction::default()
@@ -274,8 +340,8 @@ fn build_commitment_transaction_internal(
             .input(input)
             .output(user_output)
             .output(merchant_output)
-            .output_data(Bytes::new().pack())
-            .output_data(Bytes::new().pack())
+            .output_data(user_output_data.pack())
+            .output_data(merchant_output_data.pack())
             .witness(witness.pack())
             .build();
 
