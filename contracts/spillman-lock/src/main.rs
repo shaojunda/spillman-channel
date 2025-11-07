@@ -193,7 +193,7 @@ fn verify() -> Result<(), Error> {
         args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN
             ..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN]
             .try_into()
-            .unwrap(),
+            .map_err(|_| Error::LengthNotEnough)?,
     );
     let algorithm_id = args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN];
     let version =
@@ -331,6 +331,9 @@ fn verify_timeout_path(
 
     // Security: Only proceed with verification if since >= timeout
     if since >= timeout_since {
+         // Verify refund output structure
+         verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, merchant_algorithm_id)?;
+
         // Verify user signature (always single-sig)
         verify_signature_with_auth(
             AUTH_ALGORITHM_CKB,
@@ -346,9 +349,6 @@ fn verify_timeout_path(
             merchant_signature,
             &message,
         )?;
-
-        // Verify refund output structure
-        verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, merchant_algorithm_id)?;
 
         Ok(())
     } else {
@@ -437,10 +437,12 @@ fn verify_commitment_output_structure(
     user_pubkey_hash: &[u8],
     algorithm_id: u8,
 ) -> Result<(), Error> {
+    // Verify that there are exactly two outputs
     if load_cell(2, Source::Output).is_ok() {
         return Err(Error::CommitmentMustHaveExactlyTwoOutputs);
     }
 
+    // Verify that there is a merchant output
     if load_cell(1, Source::Output).is_err() {
         return Err(Error::CommitmentMustHaveExactlyTwoOutputs);
     }
@@ -503,9 +505,10 @@ fn verify_commitment_output_structure(
     // If input has type script, both outputs must have the same type script
     if let Some(input_t) = type_script {
         // Verify user output type script
-        match user_output_type {
-            Some(user_t) if user_t != input_t => return Err(Error::TypeScriptMismatch),
-            _ => {}
+        if let Some(user_t) = user_output_type {
+            if user_t != input_t {
+                return Err(Error::TypeScriptMismatch);
+            }
         }
 
         // Verify merchant output type script and xUDT amount
@@ -610,12 +613,14 @@ fn verify_refund_output_structure(
     let input_type = load_cell_type(0, Source::GroupInput)?;
 
     // 4. Verify type script consistency and xUDT amounts
-    if input_type.is_some() {
+    if let Some(input_t) = input_type {
         // Verify user output (Output 0) has same type script and all xUDT
         // Use load_cell_type API for reliable checking
         let user_output_type = load_cell_type(0, Source::Output)?;
-        if user_output_type.is_some() && user_output_type != input_type {
-            return Err(Error::TypeScriptMismatch);
+        if let Some(user_t) = user_output_type {
+            if user_t != input_t {
+                return Err(Error::TypeScriptMismatch);
+            }
         }
 
         // Verify user gets all xUDT (full refund)
@@ -628,12 +633,11 @@ fn verify_refund_output_structure(
         // If there's merchant output (Output 1), verify type script and xUDT amount = 0
         if let Ok(_merchant_output) = load_cell(1, Source::Output) {
             let merchant_output_type = load_cell_type(1, Source::Output)?;
-            if merchant_output_type.is_some() && merchant_output_type != input_type {
-                return Err(Error::TypeScriptMismatch);
-            }
-
-            // Verify merchant xUDT amount is 0 (only gets CKB capacity back)
-            if merchant_output_type.is_some() {
+            if let Some(merchant_t) = merchant_output_type {
+                if merchant_t != input_t {
+                    return Err(Error::TypeScriptMismatch);
+                }
+                // Verify merchant xUDT amount is 0 (only gets CKB capacity back)
                 let merchant_output_data = load_cell_data(1, Source::Output)?;
                 // xUDT amount is stored in first 16 bytes (u128 little-endian)
                 if merchant_output_data.len() < 16 {
