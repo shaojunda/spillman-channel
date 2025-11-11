@@ -4,16 +4,10 @@ use ckb_types::{core::TransactionView, prelude::*, H256};
 use std::str::FromStr;
 
 use crate::{
-    tx_builder::refund::build_refund_transaction,
-    tx_builder::refund_v2,
-    utils::config::load_config,
+    tx_builder::refund::build_refund_transaction, tx_builder::refund_v2, utils::config::load_config,
 };
 
-pub async fn execute(
-    tx_file: &str,
-    config_path: &str,
-    fee_rate: u64,
-) -> Result<()> {
+pub async fn execute(tx_file: &str, config_path: &str, fee_rate: u64) -> Result<()> {
     println!("🔄 执行 Refund 命令");
     println!("═══════════════════════════════════════════");
 
@@ -26,8 +20,9 @@ pub async fn execute(
     let funding_tx_json = std::fs::read_to_string(tx_file)
         .map_err(|e| anyhow!("Failed to read funding tx file: {}", e))?;
 
-    let funding_tx_view: ckb_jsonrpc_types::TransactionView = serde_json::from_str(&funding_tx_json)
-        .map_err(|e| anyhow!("Failed to parse funding tx JSON: {}", e))?;
+    let funding_tx_view: ckb_jsonrpc_types::TransactionView =
+        serde_json::from_str(&funding_tx_json)
+            .map_err(|e| anyhow!("Failed to parse funding tx JSON: {}", e))?;
 
     // Convert jsonrpc TransactionView to core TransactionView
     let funding_tx_packed: ckb_types::packed::Transaction = funding_tx_view.inner.into();
@@ -45,7 +40,14 @@ pub async fn execute(
     // For now, we'll use a simplified approach: check if inputs > 1
     let is_cofund = funding_tx.inputs().len() > 1;
 
-    println!("  - 模式: {}", if is_cofund { "Co-fund (共同出资)" } else { "Single fund (用户单独出资)" });
+    println!(
+        "  - 模式: {}",
+        if is_cofund {
+            "Co-fund (共同出资)"
+        } else {
+            "Single fund (用户单独出资)"
+        }
+    );
 
     // Parse addresses
     let user_address = Address::from_str(&config.user.address)
@@ -90,8 +92,14 @@ pub async fn execute(
     println!("  - 按照 Spillman Channel 设计：");
     println!("    1. Merchant 在通道创建时预签名（保证用户退款权利）");
     println!("    2. User 在超时后补充签名");
-    println!("  - 等待超时时间戳 ({}) 后可以广播此交易", timeout_timestamp);
-    println!("  - 使用 ckb-cli 广播: ckb-cli tx send --tx-file {}", output_path);
+    println!(
+        "  - 等待超时时间戳 ({}) 后可以广播此交易",
+        timeout_timestamp
+    );
+    println!(
+        "  - 使用 ckb-cli 广播: ckb-cli tx send --tx-file {}",
+        output_path
+    );
     if is_cofund {
         println!("\n📊 Co-fund 模式退款：");
         println!("  - User 取回自己的出资");
@@ -108,11 +116,7 @@ pub async fn execute(
 ///
 /// This is the v2 implementation using the refactored refund_v2 module.
 /// The original execute() function above is kept as v1 backup.
-pub async fn execute_v2(
-    tx_file: &str,
-    config_path: &str,
-    fee_rate: u64,
-) -> Result<()> {
+pub async fn execute_v2(tx_file: &str, config_path: &str, fee_rate: u64) -> Result<()> {
     println!("🔄 执行 Refund 命令 (v2)");
     println!("═══════════════════════════════════════════");
 
@@ -125,8 +129,9 @@ pub async fn execute_v2(
     let funding_tx_json = std::fs::read_to_string(tx_file)
         .map_err(|e| anyhow!("Failed to read funding tx file: {}", e))?;
 
-    let funding_tx_view: ckb_jsonrpc_types::TransactionView = serde_json::from_str(&funding_tx_json)
-        .map_err(|e| anyhow!("Failed to parse funding tx JSON: {}", e))?;
+    let funding_tx_view: ckb_jsonrpc_types::TransactionView =
+        serde_json::from_str(&funding_tx_json)
+            .map_err(|e| anyhow!("Failed to parse funding tx JSON: {}", e))?;
 
     // Convert jsonrpc TransactionView to core TransactionView
     let funding_tx_packed: ckb_types::packed::Transaction = funding_tx_view.inner.into();
@@ -143,7 +148,14 @@ pub async fn execute_v2(
     // Check if co-fund mode by checking if inputs > 1
     let is_cofund = funding_tx.inputs().len() > 1;
 
-    println!("  - 模式: {}", if is_cofund { "Co-fund (共同出资)" } else { "Single fund (用户单独出资)" });
+    println!(
+        "  - 模式: {}",
+        if is_cofund {
+            "Co-fund (共同出资)"
+        } else {
+            "Single fund (用户单独出资)"
+        }
+    );
 
     // Parse addresses
     let user_address = Address::from_str(&config.user.address)
@@ -173,7 +185,8 @@ pub async fn execute_v2(
         merchant_address.as_ref(),
         fee_rate,
         &output_path,
-    ).await?;
+    )
+    .await?;
 
     println!("\n✅ Refund 交易构建成功！(v2)");
     println!("═══════════════════════════════════════════");
@@ -184,7 +197,10 @@ pub async fn execute_v2(
     println!("    1. Merchant 在通道创建时预签名（保证用户退款权利）");
     println!("    2. User 在超时后补充签名");
     println!("  - 等待超时后可以签名并广播此交易");
-    println!("  - 使用 ckb-cli 广播: ckb-cli tx send --tx-file {}", output_path);
+    println!(
+        "  - 使用 ckb-cli 广播: ckb-cli tx send --tx-file {}",
+        output_path
+    );
     if is_cofund {
         println!("\n📊 Co-fund 模式退款：");
         println!("  - User 取回自己的出资");

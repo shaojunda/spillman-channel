@@ -42,15 +42,14 @@
 /// The magic happens in `build_funding_cell()`: it checks if `outputs` is empty to
 /// determine if this is the first party (user) or second party (merchant), and
 /// adjusts the funding cell capacity accordingly.
-
 use anyhow::{anyhow, Result};
 use ckb_sdk::{
     constants::{MultisigScript, ONE_CKB, SIGHASH_TYPE_HASH},
     rpc::CkbRpcClient,
     traits::{
-        CellCollector, CellDepResolver, DefaultCellCollector,
-        DefaultCellDepResolver, DefaultHeaderDepResolver, DefaultTransactionDependencyProvider,
-        HeaderDepResolver, SecpCkbRawKeySigner, TransactionDependencyProvider,
+        CellCollector, CellDepResolver, DefaultCellCollector, DefaultCellDepResolver,
+        DefaultHeaderDepResolver, DefaultTransactionDependencyProvider, HeaderDepResolver,
+        SecpCkbRawKeySigner, TransactionDependencyProvider,
     },
     tx_builder::{unlock_tx, CapacityBalancer, TxBuilder, TxBuilderError},
     unlock::{
@@ -60,11 +59,11 @@ use ckb_sdk::{
     Address, HumanCapacity, ScriptId,
 };
 use ckb_types::{
+    bytes::Bytes,
     core::{BlockView, Capacity, ScriptHashType, TransactionView},
     packed::{CellDep, CellOutput, Script, Transaction, WitnessArgs},
     prelude::*,
     H160, H256,
-    bytes::Bytes,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -128,11 +127,7 @@ impl FundingTx {
     }
 
     /// Build the funding transaction
-    pub async fn build(
-        self,
-        request: FundingRequest,
-        context: FundingContext,
-    ) -> Result<Self> {
+    pub async fn build(self, request: FundingRequest, context: FundingContext) -> Result<Self> {
         let builder = FundingTxBuilder {
             funding_tx: self,
             request,
@@ -176,12 +171,17 @@ impl FundingTx {
             Box::new(sighash_unlocker) as Box<dyn ScriptUnlocker>,
         );
 
-        let tx = self.take().ok_or_else(|| anyhow!("No transaction to sign"))?;
+        let tx = self
+            .take()
+            .ok_or_else(|| anyhow!("No transaction to sign"))?;
         let tx_dep_provider = DefaultTransactionDependencyProvider::new(&rpc_url, 10);
 
         let (tx, still_locked_groups) = unlock_tx(tx, &tx_dep_provider, &unlockers)?;
         if !still_locked_groups.is_empty() {
-            return Err(anyhow!("Some script groups are still locked: {:?}", still_locked_groups));
+            return Err(anyhow!(
+                "Some script groups are still locked: {:?}",
+                still_locked_groups
+            ));
         }
 
         self.update(tx);
@@ -228,7 +228,9 @@ impl FundingTx {
             );
         }
 
-        let tx = self.take().ok_or_else(|| anyhow!("No transaction to sign"))?;
+        let tx = self
+            .take()
+            .ok_or_else(|| anyhow!("No transaction to sign"))?;
         let tx_dep_provider = DefaultTransactionDependencyProvider::new(&rpc_url, 10);
 
         let (tx, still_locked_groups) = unlock_tx(tx, &tx_dep_provider, &unlockers)?;
@@ -363,10 +365,10 @@ impl FundingTxBuilder {
                     // Second party: add to existing xUDT amount
                     let existing_data_bytes: Vec<u8> = existing_data.unpack();
                     if existing_data_bytes.len() >= 16 {
-                        let existing_amount = u128::from_le_bytes(
-                            existing_data_bytes[0..16].try_into().unwrap()
-                        );
-                        existing_amount.checked_add(xudt_amount)
+                        let existing_amount =
+                            u128::from_le_bytes(existing_data_bytes[0..16].try_into().unwrap());
+                        existing_amount
+                            .checked_add(xudt_amount)
                             .expect("xUDT amount overflow")
                     } else {
                         xudt_amount
@@ -424,7 +426,10 @@ impl FundingTxBuilder {
             _ => return Ok(base_tx),
         };
 
-        let type_script = self.request.xudt_type_script.as_ref()
+        let type_script = self
+            .request
+            .xudt_type_script
+            .as_ref()
             .ok_or_else(|| anyhow!("xUDT amount specified but no type script"))?;
         // Collect all cells with matching lock script
         use ckb_sdk::traits::CellQueryOptions;
@@ -434,7 +439,9 @@ impl FundingTxBuilder {
         // Set min_total_capacity to a large value to collect all matching cells
         // Default is 1 shannon which stops after collecting just one cell
         query.min_total_capacity = u64::MAX;
-        let (cells, _) = cell_collector.collect_live_cells_async(&query, false).await?;
+        let (cells, _) = cell_collector
+            .collect_live_cells_async(&query, false)
+            .await?;
 
         println!("  - Found {} cells with matching lock script", cells.len());
 
@@ -472,8 +479,10 @@ impl FundingTxBuilder {
             }
         }
 
-        println!("  - Summary: {} cells with type script, {} cells without type script",
-            cells_with_type, cells_without_type);
+        println!(
+            "  - Summary: {} cells with type script, {} cells without type script",
+            cells_with_type, cells_without_type
+        );
 
         if collected_xudt_amount < xudt_amount {
             return Err(anyhow!(
@@ -483,7 +492,11 @@ impl FundingTxBuilder {
             ));
         }
 
-        println!("  - Collected {} xUDT from {} cells", collected_xudt_amount, xudt_inputs.len());
+        println!(
+            "  - Collected {} xUDT from {} cells",
+            collected_xudt_amount,
+            xudt_inputs.len()
+        );
 
         // Calculate change amount
         let change_amount = collected_xudt_amount - xudt_amount;
@@ -510,7 +523,7 @@ impl FundingTxBuilder {
             inputs.push(
                 ckb_types::packed::CellInput::new_builder()
                     .previous_output(cell.out_point.clone())
-                    .build()
+                    .build(),
             );
             // Add witness placeholder for this input
             witnesses.push(witness_placeholder.as_bytes().pack());
@@ -562,7 +575,8 @@ impl FundingTxBuilder {
         }
 
         // Rebuild transaction with witnesses and cell deps
-        let tx = base_tx.as_advanced_builder()
+        let tx = base_tx
+            .as_advanced_builder()
             .set_inputs(inputs)
             .set_outputs(outputs)
             .set_outputs_data(outputs_data)
@@ -629,49 +643,87 @@ impl FundingTxBuilder {
 
         let tx = if !should_sign {
             // Build without signing (for co-funding - sign later with all keys)
-            let base_tx = self.build_base_async(
-                &mut cell_collector,
-                &cell_dep_resolver,
-                &header_dep_resolver,
-                &tx_dep_provider,
-            ).await?;
+            let base_tx = self
+                .build_base_async(
+                    &mut cell_collector,
+                    &cell_dep_resolver,
+                    &header_dep_resolver,
+                    &tx_dep_provider,
+                )
+                .await?;
 
             // Balance xUDT cells first (if this is an xUDT transaction)
-            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver).await?;
+            let xudt_balanced_tx = self
+                .balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver)
+                .await?;
 
             // Balance the transaction (add inputs for this party)
-            balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?
+            balancer.balance_tx_capacity(
+                &xudt_balanced_tx,
+                &mut cell_collector,
+                &tx_dep_provider,
+                &cell_dep_resolver,
+                &header_dep_resolver,
+            )?
         } else if is_incremental {
             // Incremental construction: build and balance, but preserve existing signatures
-            let base_tx = self.build_base_async(
-                &mut cell_collector,
-                &cell_dep_resolver,
-                &header_dep_resolver,
-                &tx_dep_provider,
-            ).await?;
+            let base_tx = self
+                .build_base_async(
+                    &mut cell_collector,
+                    &cell_dep_resolver,
+                    &header_dep_resolver,
+                    &tx_dep_provider,
+                )
+                .await?;
 
             // Balance xUDT cells first (if this is an xUDT transaction)
-            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver).await?;
+            let xudt_balanced_tx = self
+                .balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver)
+                .await?;
 
             // Balance the transaction (add inputs for this party)
-            let balanced_tx = balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?;
+            let balanced_tx = balancer.balance_tx_capacity(
+                &xudt_balanced_tx,
+                &mut cell_collector,
+                &tx_dep_provider,
+                &cell_dep_resolver,
+                &header_dep_resolver,
+            )?;
 
             // Unlock only the NEW inputs added by this party
             // Get the number of existing inputs from the original transaction
-            let existing_input_count = self.funding_tx.tx.as_ref().map(|tx| tx.inputs().len()).unwrap_or(0);
-            let existing_witnesses = self.funding_tx.tx.as_ref().map(|tx| tx.witnesses()).unwrap_or_default();
+            let existing_input_count = self
+                .funding_tx
+                .tx
+                .as_ref()
+                .map(|tx| tx.inputs().len())
+                .unwrap_or(0);
+            let existing_witnesses = self
+                .funding_tx
+                .tx
+                .as_ref()
+                .map(|tx| tx.witnesses())
+                .unwrap_or_default();
             let existing_witnesses_len = existing_witnesses.len();
 
             // Sign the new transaction
             let (signed_tx, still_locked) = unlock_tx(balanced_tx, &tx_dep_provider, &unlockers)?;
 
             // Check if only new inputs are locked (existing inputs should remain signed)
-            let new_locked_groups: Vec<_> = still_locked.iter()
-                .filter(|g| g.input_indices.iter().any(|&idx| idx >= existing_input_count))
+            let new_locked_groups: Vec<_> = still_locked
+                .iter()
+                .filter(|g| {
+                    g.input_indices
+                        .iter()
+                        .any(|&idx| idx >= existing_input_count)
+                })
                 .collect();
 
             if !new_locked_groups.is_empty() {
-                return Err(anyhow!("Some NEW script groups are still locked: {:?}", new_locked_groups));
+                return Err(anyhow!(
+                    "Some NEW script groups are still locked: {:?}",
+                    new_locked_groups
+                ));
             }
 
             // Preserve existing witnesses for existing inputs
@@ -679,30 +731,47 @@ impl FundingTxBuilder {
             let mut all_witnesses: Vec<_> = existing_witnesses.into_iter().collect();
 
             // Append new witnesses for new inputs
-            let new_witnesses: Vec<_> = signed_tx.witnesses().into_iter().skip(existing_witnesses_len).collect();
+            let new_witnesses: Vec<_> = signed_tx
+                .witnesses()
+                .into_iter()
+                .skip(existing_witnesses_len)
+                .collect();
             all_witnesses.extend(new_witnesses);
 
             builder.set_witnesses(all_witnesses).build().into()
         } else {
             // First party: build, balance xUDT, balance capacity, then unlock
-            let base_tx = self.build_base_async(
-                &mut cell_collector,
-                &cell_dep_resolver,
-                &header_dep_resolver,
-                &tx_dep_provider,
-            ).await?;
+            let base_tx = self
+                .build_base_async(
+                    &mut cell_collector,
+                    &cell_dep_resolver,
+                    &header_dep_resolver,
+                    &tx_dep_provider,
+                )
+                .await?;
 
             // Balance xUDT cells first (if this is an xUDT transaction)
-            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver).await?;
+            let xudt_balanced_tx = self
+                .balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver)
+                .await?;
 
             // Balance capacity
-            let balanced_tx = balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?;
+            let balanced_tx = balancer.balance_tx_capacity(
+                &xudt_balanced_tx,
+                &mut cell_collector,
+                &tx_dep_provider,
+                &cell_dep_resolver,
+                &header_dep_resolver,
+            )?;
 
             // Unlock
             let (tx, still_locked_groups) = unlock_tx(balanced_tx, &tx_dep_provider, &unlockers)?;
 
             if !still_locked_groups.is_empty() {
-                return Err(anyhow!("Some script groups are still locked: {:?}", still_locked_groups));
+                return Err(anyhow!(
+                    "Some script groups are still locked: {:?}",
+                    still_locked_groups
+                ));
             }
 
             tx
@@ -755,8 +824,7 @@ pub async fn build_funding_transaction(
 
     println!(
         "  - Spillman Lock cell capacity: {} ({} shannon)",
-        capacity,
-        capacity_shannon
+        capacity, capacity_shannon
     );
 
     // Build xUDT type script and cell dep if xudt_amount is provided
@@ -767,7 +835,7 @@ pub async fn build_funding_transaction(
                 .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
             let args = ckb_types::bytes::Bytes::from(
                 hex::decode(usdi_config.args.trim_start_matches("0x"))
-                    .map_err(|e| anyhow!("Invalid args hex: {}", e))?
+                    .map_err(|e| anyhow!("Invalid args hex: {}", e))?,
             );
 
             let type_script = Script::new_builder()
@@ -781,11 +849,15 @@ pub async fn build_funding_transaction(
                 .map_err(|e| anyhow!("Invalid tx_hash: {}", e))?;
             let out_point = ckb_types::packed::OutPoint::new_builder()
                 .tx_hash(tx_hash.pack())
-                .index(ckb_types::packed::Uint32::new_unchecked(usdi_config.index.to_le_bytes().to_vec().into()))
+                .index(ckb_types::packed::Uint32::new_unchecked(
+                    usdi_config.index.to_le_bytes().to_vec().into(),
+                ))
                 .build();
             let cell_dep = CellDep::new_builder()
                 .out_point(out_point)
-                .dep_type(ckb_types::packed::Byte::new(ckb_types::core::DepType::Code as u8))
+                .dep_type(ckb_types::packed::Byte::new(
+                    ckb_types::core::DepType::Code as u8,
+                ))
                 .build();
 
             println!("  - xUDT amount: {}", xudt_amount.unwrap());
@@ -829,11 +901,11 @@ pub async fn build_funding_transaction(
 
     // Build and sign transaction
     println!("  - Building and signing funding transaction...");
-    let signed_tx = FundingTx::new()
-        .build(request, context.clone())
-        .await?;
+    let signed_tx = FundingTx::new().build(request, context.clone()).await?;
 
-    let tx = signed_tx.into_inner().ok_or_else(|| anyhow!("No transaction"))?;
+    let tx = signed_tx
+        .into_inner()
+        .ok_or_else(|| anyhow!("No transaction"))?;
     let tx_hash = tx.hash();
 
     println!("✓ Transaction built and signed");
@@ -920,48 +992,53 @@ pub async fn build_cofund_funding_transaction(
     let user_capacity_shannon: u64 = user_capacity.into();
 
     // Build xUDT type script and cell dep if xudt amounts are provided
-    let (xudt_type_script, xudt_cell_dep) = if user_xudt_amount.is_some() || merchant_xudt_amount.is_some() {
-        if let Some(ref usdi_config) = config.usdi {
-            // Build xUDT type script
-            let code_hash = H256::from_str(usdi_config.code_hash.trim_start_matches("0x"))
-                .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
-            let args = ckb_types::bytes::Bytes::from(
-                hex::decode(usdi_config.args.trim_start_matches("0x"))
-                    .map_err(|e| anyhow!("Invalid args hex: {}", e))?
-            );
+    let (xudt_type_script, xudt_cell_dep) =
+        if user_xudt_amount.is_some() || merchant_xudt_amount.is_some() {
+            if let Some(ref usdi_config) = config.usdi {
+                // Build xUDT type script
+                let code_hash = H256::from_str(usdi_config.code_hash.trim_start_matches("0x"))
+                    .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
+                let args = ckb_types::bytes::Bytes::from(
+                    hex::decode(usdi_config.args.trim_start_matches("0x"))
+                        .map_err(|e| anyhow!("Invalid args hex: {}", e))?,
+                );
 
-            let type_script = Script::new_builder()
-                .code_hash(code_hash.pack())
-                .hash_type(ckb_types::packed::Byte::new(ScriptHashType::Type as u8))
-                .args(args.pack())
-                .build();
+                let type_script = Script::new_builder()
+                    .code_hash(code_hash.pack())
+                    .hash_type(ckb_types::packed::Byte::new(ScriptHashType::Type as u8))
+                    .args(args.pack())
+                    .build();
 
-            // Build xUDT cell dep
-            let tx_hash = H256::from_str(usdi_config.tx_hash.trim_start_matches("0x"))
-                .map_err(|e| anyhow!("Invalid tx_hash: {}", e))?;
-            let out_point = ckb_types::packed::OutPoint::new_builder()
-                .tx_hash(tx_hash.pack())
-                .index(ckb_types::packed::Uint32::new_unchecked(usdi_config.index.to_le_bytes().to_vec().into()))
-                .build();
-            let cell_dep = CellDep::new_builder()
-                .out_point(out_point)
-                .dep_type(ckb_types::packed::Byte::new(ckb_types::core::DepType::Code as u8))
-                .build();
+                // Build xUDT cell dep
+                let tx_hash = H256::from_str(usdi_config.tx_hash.trim_start_matches("0x"))
+                    .map_err(|e| anyhow!("Invalid tx_hash: {}", e))?;
+                let out_point = ckb_types::packed::OutPoint::new_builder()
+                    .tx_hash(tx_hash.pack())
+                    .index(ckb_types::packed::Uint32::new_unchecked(
+                        usdi_config.index.to_le_bytes().to_vec().into(),
+                    ))
+                    .build();
+                let cell_dep = CellDep::new_builder()
+                    .out_point(out_point)
+                    .dep_type(ckb_types::packed::Byte::new(
+                        ckb_types::core::DepType::Code as u8,
+                    ))
+                    .build();
 
-            if let Some(user_amt) = user_xudt_amount {
-                println!("  - User xUDT amount: {}", user_amt);
+                if let Some(user_amt) = user_xudt_amount {
+                    println!("  - User xUDT amount: {}", user_amt);
+                }
+                if let Some(merchant_amt) = merchant_xudt_amount {
+                    println!("  - Merchant xUDT amount: {}", merchant_amt);
+                }
+
+                (Some(type_script), Some(cell_dep))
+            } else {
+                return Err(anyhow!("xUDT amount provided but usdi config not found"));
             }
-            if let Some(merchant_amt) = merchant_xudt_amount {
-                println!("  - Merchant xUDT amount: {}", merchant_amt);
-            }
-
-            (Some(type_script), Some(cell_dep))
         } else {
-            return Err(anyhow!("xUDT amount provided but usdi config not found"));
-        }
-    } else {
-        (None, None)
-    };
+            (None, None)
+        };
 
     // Calculate merchant's minimum occupied capacity
     // NOTE: For xUDT channels, merchant needs extra capacity for type script
@@ -972,7 +1049,8 @@ pub async fn build_cofund_funding_transaction(
 
     // Add type script if this is an xUDT channel
     if let Some(ref type_script) = xudt_type_script {
-        temp_merchant_cell_builder = temp_merchant_cell_builder.type_(Some(type_script.clone()).pack());
+        temp_merchant_cell_builder =
+            temp_merchant_cell_builder.type_(Some(type_script.clone()).pack());
     }
 
     let temp_merchant_cell = temp_merchant_cell_builder.build();
@@ -990,8 +1068,15 @@ pub async fn build_cofund_funding_transaction(
     let user_amount = user_capacity_shannon + user_buffer_shannon;
     let merchant_amount = merchant_capacity_shannon;
 
-    println!("  - User 需出资: {} + {} buffer", user_capacity, HumanCapacity::from(user_buffer_shannon));
-    println!("  - Merchant 需出资: {} (最小占用)", HumanCapacity::from(merchant_capacity_shannon));
+    println!(
+        "  - User 需出资: {} + {} buffer",
+        user_capacity,
+        HumanCapacity::from(user_buffer_shannon)
+    );
+    println!(
+        "  - Merchant 需出资: {} (最小占用)",
+        HumanCapacity::from(merchant_capacity_shannon)
+    );
 
     // Parse keys for user and merchant
     let user_secret_keys = config.user.get_secret_keys()?;
@@ -1007,49 +1092,64 @@ pub async fn build_cofund_funding_transaction(
         let v2_script_id = MultisigScript::V2.script_id();
 
         let multisig_type = if code_hash == legacy_script_id.code_hash
-            && user_lock_script.hash_type() == legacy_script_id.hash_type.into() {
+            && user_lock_script.hash_type() == legacy_script_id.hash_type.into()
+        {
             MultisigScript::Legacy
         } else if code_hash == v2_script_id.code_hash
-            && user_lock_script.hash_type() == v2_script_id.hash_type.into() {
+            && user_lock_script.hash_type() == v2_script_id.hash_type.into()
+        {
             MultisigScript::V2
         } else {
             return Err(anyhow!("Unknown multisig type for user address"));
         };
 
-        Some(build_multisig_config_with_type(&user_secret_keys, threshold, total, multisig_type)?)
+        Some(build_multisig_config_with_type(
+            &user_secret_keys,
+            threshold,
+            total,
+            multisig_type,
+        )?)
     } else {
         None
     };
 
-    let merchant_multisig_config = if let Some((threshold, total)) = config.merchant.get_multisig_config() {
-        // Detect merchant's multisig type from address
-        let merchant_lock_script = Script::from(merchant_address);
-        let code_hash: H256 = merchant_lock_script.code_hash().unpack();
+    let merchant_multisig_config =
+        if let Some((threshold, total)) = config.merchant.get_multisig_config() {
+            // Detect merchant's multisig type from address
+            let merchant_lock_script = Script::from(merchant_address);
+            let code_hash: H256 = merchant_lock_script.code_hash().unpack();
 
-        let legacy_script_id = MultisigScript::Legacy.script_id();
-        let v2_script_id = MultisigScript::V2.script_id();
+            let legacy_script_id = MultisigScript::Legacy.script_id();
+            let v2_script_id = MultisigScript::V2.script_id();
 
-        let multisig_type = if code_hash == legacy_script_id.code_hash
-            && merchant_lock_script.hash_type() == legacy_script_id.hash_type.into() {
-            MultisigScript::Legacy
-        } else if code_hash == v2_script_id.code_hash
-            && merchant_lock_script.hash_type() == v2_script_id.hash_type.into() {
-            MultisigScript::V2
+            let multisig_type = if code_hash == legacy_script_id.code_hash
+                && merchant_lock_script.hash_type() == legacy_script_id.hash_type.into()
+            {
+                MultisigScript::Legacy
+            } else if code_hash == v2_script_id.code_hash
+                && merchant_lock_script.hash_type() == v2_script_id.hash_type.into()
+            {
+                MultisigScript::V2
+            } else {
+                return Err(anyhow!("Unknown multisig type for merchant address"));
+            };
+
+            Some(build_multisig_config_with_type(
+                &merchant_secret_keys,
+                threshold,
+                total,
+                multisig_type,
+            )?)
         } else {
-            return Err(anyhow!("Unknown multisig type for merchant address"));
+            None
         };
-
-        Some(build_multisig_config_with_type(&merchant_secret_keys, threshold, total, multisig_type)?)
-    } else {
-        None
-    };
 
     // Step 1: User builds initial transaction (without signing)
     println!("\n📝 Step 1: User 构建初始交易（不签名）...");
     let user_request = FundingRequest {
         script: spillman_lock_script.clone(),
-        local_amount: user_amount,  // user_capacity + buffer
-        fee_rate, // Use parameter, default 1000 shannon/KB
+        local_amount: user_amount, // user_capacity + buffer
+        fee_rate,                  // Use parameter, default 1000 shannon/KB
         xudt_type_script: xudt_type_script.clone(),
         xudt_amount: user_xudt_amount,
     };
@@ -1067,14 +1167,17 @@ pub async fn build_cofund_funding_transaction(
         .build_without_sign(user_request, user_context)
         .await?;
 
-    println!("✓ User transaction built (含 {} user 资金 + buffer)", user_capacity);
+    println!(
+        "✓ User transaction built (含 {} user 资金 + buffer)",
+        user_capacity
+    );
 
     // Step 2: Merchant adds their minimum occupied capacity on top (without signing)
     println!("\n📝 Step 2: Merchant 添加最小占用容量（不签名）...");
     let merchant_request = FundingRequest {
         script: spillman_lock_script.clone(),
-        local_amount: merchant_amount,  // min occupied capacity
-        fee_rate, // Use parameter, default 1000 shannon/KB
+        local_amount: merchant_amount, // min occupied capacity
+        fee_rate,                      // Use parameter, default 1000 shannon/KB
         xudt_type_script: xudt_type_script.clone(),
         xudt_amount: merchant_xudt_amount,
     };
@@ -1087,7 +1190,7 @@ pub async fn build_cofund_funding_transaction(
         xudt_cell_dep,
     };
 
-    let combined_tx = user_tx  // Incremental construction!
+    let combined_tx = user_tx // Incremental construction!
         .build_without_sign(merchant_request, merchant_context.clone())
         .await?;
 
@@ -1099,17 +1202,20 @@ pub async fn build_cofund_funding_transaction(
     println!("\n🔏 Step 3: 使用双方密钥签名交易...");
 
     // For multisig, only include threshold number of merchant keys (not all)
-    let merchant_signing_keys: Vec<_> = if let Some(ref multisig_cfg) = merchant_context.multisig_config {
-        // Only take threshold number of keys for signing
-        merchant_secret_keys.iter()
-            .take(multisig_cfg.threshold() as usize)
-            .cloned()
-            .collect()
-    } else {
-        merchant_secret_keys.iter().cloned().collect()
-    };
+    let merchant_signing_keys: Vec<_> =
+        if let Some(ref multisig_cfg) = merchant_context.multisig_config {
+            // Only take threshold number of keys for signing
+            merchant_secret_keys
+                .iter()
+                .take(multisig_cfg.threshold() as usize)
+                .cloned()
+                .collect()
+        } else {
+            merchant_secret_keys.iter().cloned().collect()
+        };
 
-    let all_secret_keys: Vec<_> = user_secret_keys.iter()
+    let all_secret_keys: Vec<_> = user_secret_keys
+        .iter()
         .chain(merchant_signing_keys.iter())
         .cloned()
         .collect();
@@ -1122,7 +1228,9 @@ pub async fn build_cofund_funding_transaction(
         )
         .await?;
 
-    let tx = final_tx.into_inner().ok_or_else(|| anyhow!("No transaction"))?;
+    let tx = final_tx
+        .into_inner()
+        .ok_or_else(|| anyhow!("No transaction"))?;
     let tx_hash = tx.hash();
 
     println!("✓ Transaction built and signed");
@@ -1155,11 +1263,23 @@ pub async fn build_cofund_funding_transaction(
     println!("  - Fee: {} ({} shannon)", HumanCapacity::from(fee), fee);
 
     // Verify funding cell capacity
-    let funding_cell_capacity: u64 = Unpack::<u64>::unpack(&tx.outputs().get(0).unwrap().capacity());
+    let funding_cell_capacity: u64 =
+        Unpack::<u64>::unpack(&tx.outputs().get(0).unwrap().capacity());
     let expected_capacity = user_capacity_shannon + merchant_capacity_shannon + user_buffer_shannon;
-    println!("  - Funding cell capacity: {} ({} shannon)", HumanCapacity::from(funding_cell_capacity), funding_cell_capacity);
-    println!("  - Expected capacity: {} ({} shannon)", HumanCapacity::from(expected_capacity), expected_capacity);
-    assert_eq!(funding_cell_capacity, expected_capacity, "Funding cell capacity mismatch!");
+    println!(
+        "  - Funding cell capacity: {} ({} shannon)",
+        HumanCapacity::from(funding_cell_capacity),
+        funding_cell_capacity
+    );
+    println!(
+        "  - Expected capacity: {} ({} shannon)",
+        HumanCapacity::from(expected_capacity),
+        expected_capacity
+    );
+    assert_eq!(
+        funding_cell_capacity, expected_capacity,
+        "Funding cell capacity mismatch!"
+    );
 
     // Save transaction (with hash field for refund command to use)
     let tx_json = ckb_jsonrpc_types::TransactionView::from(tx);
@@ -1206,11 +1326,26 @@ mod tests {
         use std::str::FromStr;
 
         // Test various formats
-        assert_eq!(HumanCapacity::from_str("100").unwrap(), HumanCapacity::from(100 * ONE_CKB));
-        assert_eq!(HumanCapacity::from_str("100.0").unwrap(), HumanCapacity::from(100 * ONE_CKB));
-        assert_eq!(HumanCapacity::from_str("100.5").unwrap(), HumanCapacity::from(100_50000000));
-        assert_eq!(HumanCapacity::from_str("0.123").unwrap(), HumanCapacity::from(12_300_000));
-        assert_eq!(HumanCapacity::from_str("0.00000001").unwrap(), HumanCapacity::from(1)); // 1 shannon
+        assert_eq!(
+            HumanCapacity::from_str("100").unwrap(),
+            HumanCapacity::from(100 * ONE_CKB)
+        );
+        assert_eq!(
+            HumanCapacity::from_str("100.0").unwrap(),
+            HumanCapacity::from(100 * ONE_CKB)
+        );
+        assert_eq!(
+            HumanCapacity::from_str("100.5").unwrap(),
+            HumanCapacity::from(100_50000000)
+        );
+        assert_eq!(
+            HumanCapacity::from_str("0.123").unwrap(),
+            HumanCapacity::from(12_300_000)
+        );
+        assert_eq!(
+            HumanCapacity::from_str("0.00000001").unwrap(),
+            HumanCapacity::from(1)
+        ); // 1 shannon
 
         // Test conversion to u64
         let capacity: u64 = HumanCapacity::from_str("100.5").unwrap().into();

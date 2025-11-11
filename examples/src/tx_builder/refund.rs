@@ -37,7 +37,7 @@ pub fn build_refund_transaction(
     funding_tx: &TransactionView,
     user_lock_script: Script,
     merchant_lock_script: Option<Script>,
-    _timeout_timestamp: u64,  // Not used - we read from Spillman Lock args
+    _timeout_timestamp: u64, // Not used - we read from Spillman Lock args
     fee_rate: u64,
     output_path: &str,
 ) -> Result<TransactionView> {
@@ -57,7 +57,10 @@ pub fn build_refund_transaction(
     let lock_script = spillman_cell.lock();
     let args_bytes: Bytes = lock_script.args().unpack();
     if args_bytes.len() != 50 {
-        return Err(anyhow!("Invalid Spillman Lock args length: expected 50, got {}", args_bytes.len()));
+        return Err(anyhow!(
+            "Invalid Spillman Lock args length: expected 50, got {}",
+            args_bytes.len()
+        ));
     }
 
     // Extract timeout_since from args (bytes 40-48)
@@ -65,12 +68,18 @@ pub fn build_refund_transaction(
     let timeout_since = u64::from_le_bytes(
         args_bytes[40..48]
             .try_into()
-            .map_err(|_| anyhow!("Failed to parse timeout_since from args"))?
+            .map_err(|_| anyhow!("Failed to parse timeout_since from args"))?,
     );
 
-    println!("    - Spillman Lock cell capacity: {} CKB", spillman_capacity as f64 / 100_000_000.0);
+    println!(
+        "    - Spillman Lock cell capacity: {} CKB",
+        spillman_capacity as f64 / 100_000_000.0
+    );
     println!("    - Funding tx hash: {:#x}", funding_tx_hash);
-    println!("    - Timeout since (from Spillman Lock args): 0x{:x}", timeout_since);
+    println!(
+        "    - Timeout since (from Spillman Lock args): 0x{:x}",
+        timeout_since
+    );
 
     // Build input from Spillman Lock cell
     // Use the timeout_since value directly (already Since-encoded)
@@ -222,12 +231,21 @@ pub fn build_refund_transaction(
         let actual_fee = calculate_tx_fee(&temp_tx);
 
         if iteration == 0 {
-            println!("  - 初始手续费估算: {} shannon ({} CKB)", actual_fee, actual_fee as f64 / 100_000_000.0);
+            println!(
+                "  - 初始手续费估算: {} shannon ({} CKB)",
+                actual_fee,
+                actual_fee as f64 / 100_000_000.0
+            );
         }
 
         // Check if fee has stabilized
         if actual_fee == current_fee {
-            println!("  - 手续费已稳定: {} shannon ({} CKB) (迭代 {} 次)", actual_fee, actual_fee as f64 / 100_000_000.0, iteration + 1);
+            println!(
+                "  - 手续费已稳定: {} shannon ({} CKB) (迭代 {} 次)",
+                actual_fee,
+                actual_fee as f64 / 100_000_000.0,
+                iteration + 1
+            );
             final_user_capacity = user_cap;
             final_tx = Some(temp_tx);
             break;
@@ -238,7 +256,10 @@ pub fn build_refund_transaction(
         final_user_capacity = user_cap;
 
         if iteration == max_iterations - 1 {
-            println!("  - ⚠️  达到最大迭代次数，使用最后计算的手续费: {} shannon", current_fee);
+            println!(
+                "  - ⚠️  达到最大迭代次数，使用最后计算的手续费: {} shannon",
+                current_fee
+            );
             final_tx = Some(temp_tx);
         }
     }
@@ -248,11 +269,20 @@ pub fn build_refund_transaction(
     // Print refund mode and amounts
     if merchant_lock_script.is_some() {
         println!("    - Mode: Co-fund (2 outputs)");
-        println!("      - User refund: {} CKB", final_user_capacity as f64 / 100_000_000.0);
-        println!("      - Merchant refund: {} CKB", merchant_capacity as f64 / 100_000_000.0);
+        println!(
+            "      - User refund: {} CKB",
+            final_user_capacity as f64 / 100_000_000.0
+        );
+        println!(
+            "      - Merchant refund: {} CKB",
+            merchant_capacity as f64 / 100_000_000.0
+        );
     } else {
         println!("    - Mode: Single fund (1 output)");
-        println!("      - User refund: {} CKB", final_user_capacity as f64 / 100_000_000.0);
+        println!(
+            "      - User refund: {} CKB",
+            final_user_capacity as f64 / 100_000_000.0
+        );
     }
 
     println!("\n  ✓ Refund 交易构建完成（未签名）");
@@ -266,16 +296,28 @@ pub fn build_refund_transaction(
     // Parse private keys using ckb-crypto
     use crate::utils::crypto::pubkey_hash;
 
-    let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
+    let user_privkey_hex = config
+        .user
+        .private_key
+        .as_ref()
+        .expect("User private_key is required");
     let user_privkey = Privkey::from_str(user_privkey_hex)
         .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
-    let user_pubkey = user_privkey.pubkey().map_err(|e| anyhow!("Failed to get user pubkey: {:?}", e))?;
+    let user_pubkey = user_privkey
+        .pubkey()
+        .map_err(|e| anyhow!("Failed to get user pubkey: {:?}", e))?;
     let user_pubkey_hash_from_privkey = pubkey_hash(&user_pubkey);
 
-    let merchant_privkey_hex = config.merchant.private_key.as_ref().expect("Merchant private_key is required");
+    let merchant_privkey_hex = config
+        .merchant
+        .private_key
+        .as_ref()
+        .expect("Merchant private_key is required");
     let merchant_privkey = Privkey::from_str(merchant_privkey_hex)
         .map_err(|e| anyhow!("Failed to parse merchant private key: {:?}", e))?;
-    let merchant_pubkey = merchant_privkey.pubkey().map_err(|e| anyhow!("Failed to get merchant pubkey: {:?}", e))?;
+    let merchant_pubkey = merchant_privkey
+        .pubkey()
+        .map_err(|e| anyhow!("Failed to get merchant pubkey: {:?}", e))?;
     let merchant_pubkey_hash_from_privkey = pubkey_hash(&merchant_pubkey);
 
     // Verify pubkey hashes match Spillman Lock args

@@ -57,17 +57,17 @@ fn test_spillman_lock_commitment_path() {
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
     let args = [
-        merchant_pubkey_hash.as_ref(),         // 0..20: merchant lock arg (blake160(pubkey))
-        user_pubkey_hash.as_ref(),             // 20..40: user pubkey hash
+        merchant_pubkey_hash.as_ref(), // 0..20: merchant lock arg (blake160(pubkey))
+        user_pubkey_hash.as_ref(),     // 20..40: user pubkey hash
         &timeout_since.as_u64().to_le_bytes(), // 40..48: timeout timestamp (little-endian)
-        &[algorithm_id],                       // 48: algorithm_id (0=single-sig)
-        &[version],                            // 49: version
+        &[algorithm_id],               // 48: algorithm_id (0=single-sig)
+        &[version],                    // 49: version
     ]
     .concat();
 
@@ -196,8 +196,8 @@ fn test_spillman_lock_timeout_path() {
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
@@ -389,8 +389,8 @@ fn test_spillman_lock_timeout_path_with_co_funding() {
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
@@ -569,8 +569,8 @@ fn test_spillman_lock_timeout_path_with_xudt() {
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
@@ -700,8 +700,8 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
@@ -733,7 +733,10 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
     // Create xUDT type script
     let udt_owner_lock_hash = [42u8; 32];
     let type_script = context
-        .build_script(&simple_udt_out_point.clone(), udt_owner_lock_hash.to_vec().into())
+        .build_script(
+            &simple_udt_out_point.clone(),
+            udt_owner_lock_hash.to_vec().into(),
+        )
         .expect("script");
 
     let spillman_lock_dep = CellDep::new_builder()
@@ -979,20 +982,20 @@ fn test_spillman_lock_commitment_path_with_multisig_merchant() {
 
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 6; // Multi-sig
     let version: u8 = 0;
 
     // Multisig config: S=0, R=0, M=2, N=3
     let multisig_config = [
-        &[0u8][..],                          // S: format version
-        &[0u8][..],                          // R: first_n (0 means any 2 of 3)
-        &[2u8][..],                          // M: threshold (need 2 signatures)
-        &[3u8][..],                          // N: total pubkeys (3 pubkeys)
-        merchant_pubkey_hash1.as_ref(),      // PubKeyHash1
-        merchant_pubkey_hash2.as_ref(),      // PubKeyHash2
-        merchant_pubkey_hash3.as_ref(),      // PubKeyHash3
+        &[0u8][..],                     // S: format version
+        &[0u8][..],                     // R: first_n (0 means any 2 of 3)
+        &[2u8][..],                     // M: threshold (need 2 signatures)
+        &[3u8][..],                     // N: total pubkeys (3 pubkeys)
+        merchant_pubkey_hash1.as_ref(), // PubKeyHash1
+        merchant_pubkey_hash2.as_ref(), // PubKeyHash2
+        merchant_pubkey_hash3.as_ref(), // PubKeyHash3
     ]
     .concat();
 
@@ -1070,7 +1073,7 @@ fn test_spillman_lock_commitment_path_with_multisig_merchant() {
         UNLOCK_TYPE_COMMITMENT,
         &user_key,
         &[&merchant_key1, &merchant_key2], // Use 2 of 3 keys
-        &multisig_config,                   // Pass multisig config
+        &multisig_config,                  // Pass multisig config
     );
 
     let cycles = context
@@ -1102,8 +1105,8 @@ fn test_spillman_lock_commitment_path_with_multisig_merchant() {
     let insufficient_witness = [
         &EMPTY_WITNESS_ARGS[..],
         &[UNLOCK_TYPE_COMMITMENT][..],
-        &multisig_config[..],      // Must include multisig_config
-        &merchant_signature1[..],   // Only 1 signature (need 2)!
+        &multisig_config[..],     // Must include multisig_config
+        &merchant_signature1[..], // Only 1 signature (need 2)!
         &user_signature[..],
     ]
     .concat();
@@ -1141,20 +1144,20 @@ fn test_spillman_lock_timeout_path_with_multisig_merchant() {
 
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 6; // Multi-sig
     let version: u8 = 0;
 
     // Multisig config: S=0, R=0, M=2, N=3
     let multisig_config = [
-        &[0u8][..],                          // S: format version
-        &[0u8][..],                          // R: first_n (0 means any 2 of 3)
-        &[2u8][..],                          // M: threshold (need 2 signatures)
-        &[3u8][..],                          // N: total pubkeys (3 pubkeys)
-        merchant_pubkey_hash1.as_ref(),      // PubKeyHash1
-        merchant_pubkey_hash2.as_ref(),      // PubKeyHash2
-        merchant_pubkey_hash3.as_ref(),      // PubKeyHash3
+        &[0u8][..],                     // S: format version
+        &[0u8][..],                     // R: first_n (0 means any 2 of 3)
+        &[2u8][..],                     // M: threshold (need 2 signatures)
+        &[3u8][..],                     // N: total pubkeys (3 pubkeys)
+        merchant_pubkey_hash1.as_ref(), // PubKeyHash1
+        merchant_pubkey_hash2.as_ref(), // PubKeyHash2
+        merchant_pubkey_hash3.as_ref(), // PubKeyHash3
     ]
     .concat();
 
@@ -1221,7 +1224,7 @@ fn test_spillman_lock_timeout_path_with_multisig_merchant() {
         UNLOCK_TYPE_TIMEOUT,
         &user_key,
         &[&merchant_key1, &merchant_key2], // Use 2 of 3 keys
-        &multisig_config,                   // Pass multisig config
+        &multisig_config,                  // Pass multisig config
     );
 
     let cycles = context
@@ -1271,20 +1274,20 @@ fn test_spillman_lock_multisig_error_scenarios() {
 
     let user_pubkey_hash = blake160(&user_key.1.serialize());
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
     let algorithm_id: u8 = 6; // Multi-sig
     let version: u8 = 0;
 
     // Multisig config: S=0, R=0, M=2, N=3
     let multisig_config = [
-        &[0u8][..],                          // S: format version
-        &[0u8][..],                          // R: first_n (0 means any 2 of 3)
-        &[2u8][..],                          // M: threshold (need 2 signatures)
-        &[3u8][..],                          // N: total pubkeys (3 pubkeys)
-        merchant_pubkey_hash1.as_ref(),      // PubKeyHash1
-        merchant_pubkey_hash2.as_ref(),      // PubKeyHash2
-        merchant_pubkey_hash3.as_ref(),      // PubKeyHash3
+        &[0u8][..],                     // S: format version
+        &[0u8][..],                     // R: first_n (0 means any 2 of 3)
+        &[2u8][..],                     // M: threshold (need 2 signatures)
+        &[3u8][..],                     // N: total pubkeys (3 pubkeys)
+        merchant_pubkey_hash1.as_ref(), // PubKeyHash1
+        merchant_pubkey_hash2.as_ref(), // PubKeyHash2
+        merchant_pubkey_hash3.as_ref(), // PubKeyHash3
     ]
     .concat();
 
@@ -1403,7 +1406,7 @@ fn test_spillman_lock_multisig_error_scenarios() {
         outputs_data,
         UNLOCK_TYPE_COMMITMENT,
         &user_key,
-        &[&merchant_key1], // Only 1 signature for the wrong config
+        &[&merchant_key1],      // Only 1 signature for the wrong config
         &wrong_multisig_config, // Wrong config! Hash doesn't match args
     );
 
@@ -1420,8 +1423,14 @@ fn build_and_sign_tx_multisig(
     outputs: Vec<CellOutput>,
     outputs_data: Vec<Bytes>,
     unlock_type: u8,
-    user_key: &(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey),
-    merchant_keys: &[&(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey)],
+    user_key: &(
+        ckb_testtool::ckb_crypto::secp::Privkey,
+        ckb_testtool::ckb_crypto::secp::Pubkey,
+    ),
+    merchant_keys: &[&(
+        ckb_testtool::ckb_crypto::secp::Privkey,
+        ckb_testtool::ckb_crypto::secp::Pubkey,
+    )],
     multisig_config: &[u8],
 ) -> TransactionView {
     let tx = TransactionBuilder::default()
@@ -1436,10 +1445,7 @@ fn build_and_sign_tx_multisig(
     // Collect all merchant signatures
     let mut merchant_signatures = Vec::new();
     for key in merchant_keys {
-        let signature = key.0
-            .sign_recoverable(&message.into())
-            .unwrap()
-            .serialize();
+        let signature = key.0.sign_recoverable(&message.into()).unwrap().serialize();
         merchant_signatures.extend_from_slice(&signature);
     }
 
@@ -1453,9 +1459,9 @@ fn build_and_sign_tx_multisig(
     let witness = [
         &EMPTY_WITNESS_ARGS[..],
         &[unlock_type][..],
-        multisig_config,               // Full multisig config (4+N*20 bytes)
-        &merchant_signatures[..],      // M signatures (M * 65 bytes)
-        &user_signature[..],           // 1 user signature (65 bytes)
+        multisig_config,          // Full multisig config (4+N*20 bytes)
+        &merchant_signatures[..], // M signatures (M * 65 bytes)
+        &user_signature[..],      // 1 user signature (65 bytes)
     ]
     .concat();
 
@@ -1469,8 +1475,14 @@ fn build_and_sign_tx(
     outputs: Vec<CellOutput>,
     outputs_data: Vec<Bytes>,
     unlock_type: u8,
-    user_key: &(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey),
-    merchant_key: &(ckb_testtool::ckb_crypto::secp::Privkey, ckb_testtool::ckb_crypto::secp::Pubkey),
+    user_key: &(
+        ckb_testtool::ckb_crypto::secp::Privkey,
+        ckb_testtool::ckb_crypto::secp::Pubkey,
+    ),
+    merchant_key: &(
+        ckb_testtool::ckb_crypto::secp::Privkey,
+        ckb_testtool::ckb_crypto::secp::Pubkey,
+    ),
 ) -> TransactionView {
     let tx = TransactionBuilder::default()
         .cell_deps(cell_deps)
@@ -1532,8 +1544,8 @@ fn test_spillman_lock_timeout_path_with_timestamp() {
     // In real scenario: now + 7 * 24 * 60 * 60
     // For testing: use a fixed timestamp
     let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
-    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
-        .expect("valid timestamp since");
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
 
     // Build SpillmanLockArgs with timestamp
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
@@ -1542,11 +1554,11 @@ fn test_spillman_lock_timeout_path_with_timestamp() {
     let version: u8 = 0;
 
     let spillman_lock_args = [
-        merchant_pubkey_hash.as_ref(),             // 0..20: merchant lock arg
-        user_pubkey_hash.as_ref(),                 // 20..40: user pubkey hash
-        &timeout_since.as_u64().to_le_bytes(),    // 40..48: timeout timestamp (little-endian)
-        &[algorithm_id],                           // 48: algorithm_id
-        &[version],                                // 49: version
+        merchant_pubkey_hash.as_ref(),         // 0..20: merchant lock arg
+        user_pubkey_hash.as_ref(),             // 20..40: user pubkey hash
+        &timeout_since.as_u64().to_le_bytes(), // 40..48: timeout timestamp (little-endian)
+        &[algorithm_id],                       // 48: algorithm_id
+        &[version],                            // 49: version
     ]
     .concat();
 
@@ -1566,7 +1578,6 @@ fn test_spillman_lock_timeout_path_with_timestamp() {
     let spillman_lock_script = context
         .build_script(&spillman_lock_out_point, Bytes::from(spillman_lock_args))
         .expect("script");
-
 
     // prepare cells
     let cell_dep = CellDep::new_builder()
@@ -1692,7 +1703,10 @@ fn test_spillman_lock_timeout_path_with_timestamp() {
     let err = context
         .verify_tx(&incomparable_tx, 10_000_000)
         .expect_err("timestamp timeout vs epoch since should fail");
-    println!("  ✓ Correctly rejected incomparable types! Error: {:?}", err);
+    println!(
+        "  ✓ Correctly rejected incomparable types! Error: {:?}",
+        err
+    );
 
     // Test: timestamp in the future (should succeed)
     println!("\n  Testing future timestamp (should succeed)...");

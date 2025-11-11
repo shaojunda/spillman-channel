@@ -1,11 +1,7 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
-use ckb_sdk::{
-    constants::MultisigScript,
-    rpc::CkbRpcClient,
-    Address, ScriptId,
-};
+use ckb_sdk::{constants::MultisigScript, rpc::CkbRpcClient, Address, ScriptId};
 use ckb_types::{
     bytes::Bytes,
     core::TransactionView,
@@ -16,17 +12,13 @@ use ckb_types::{
 use std::{fs, str::FromStr};
 
 use crate::{
-    utils::config::load_config,
     tx_builder::funding_v2::build_multisig_config_with_type,
-    tx_builder::witness_utils::{EMPTY_WITNESS_ARGS_SIZE, UNLOCK_TYPE_SIZE, SIGNATURE_SIZE},
+    tx_builder::witness_utils::{EMPTY_WITNESS_ARGS_SIZE, SIGNATURE_SIZE, UNLOCK_TYPE_SIZE},
+    utils::config::load_config,
 };
 
 /// Execute settle command - merchant signs and broadcasts commitment transaction
-pub async fn execute(
-    tx_file: &str,
-    config_path: &str,
-    broadcast: bool,
-) -> Result<()> {
+pub async fn execute(tx_file: &str, config_path: &str, broadcast: bool) -> Result<()> {
     println!("\n═══════════════════════════════════════════════════════");
     println!("  🏦 商户结算 Commitment Transaction");
     println!("═══════════════════════════════════════════════════════\n");
@@ -44,13 +36,20 @@ pub async fn execute(
         println!("✓ 商户使用多签地址");
 
         // Get multisig parameters from config
-        let threshold = config.merchant.multisig_threshold
+        let threshold = config
+            .merchant
+            .multisig_threshold
             .ok_or_else(|| anyhow!("Merchant multisig_threshold is required"))?;
-        let total = config.merchant.multisig_total
+        let total = config
+            .merchant
+            .multisig_total
             .ok_or_else(|| anyhow!("Merchant multisig_total is required"))?;
 
         // Parse private keys
-        let privkeys = config.merchant.private_keys.as_ref()
+        let privkeys = config
+            .merchant
+            .private_keys
+            .as_ref()
             .ok_or_else(|| anyhow!("Merchant private_keys is required for multisig"))?;
 
         let parsed_keys: Result<Vec<secp256k1::SecretKey>> = privkeys
@@ -76,11 +75,13 @@ pub async fn execute(
         let v2_script_id = MultisigScript::V2.script_id();
 
         let multisig_type = if code_hash == legacy_script_id.code_hash
-            && merchant_lock_script.hash_type() == legacy_script_id.hash_type.into() {
+            && merchant_lock_script.hash_type() == legacy_script_id.hash_type.into()
+        {
             println!("  - 检测到 Legacy multisig 地址");
             MultisigScript::Legacy
         } else if code_hash == v2_script_id.code_hash
-            && merchant_lock_script.hash_type() == v2_script_id.hash_type.into() {
+            && merchant_lock_script.hash_type() == v2_script_id.hash_type.into()
+        {
             println!("  - 检测到 V2 multisig 地址");
             MultisigScript::V2
         } else {
@@ -88,15 +89,23 @@ pub async fn execute(
         };
 
         // Build multisig config with detected type
-        let multisig_config = build_multisig_config_with_type(&keys, threshold, total, multisig_type)?;
-        println!("  - 多签配置: {}-of-{}", multisig_config.threshold(), multisig_config.sighash_addresses().len());
+        let multisig_config =
+            build_multisig_config_with_type(&keys, threshold, total, multisig_type)?;
+        println!(
+            "  - 多签配置: {}-of-{}",
+            multisig_config.threshold(),
+            multisig_config.sighash_addresses().len()
+        );
 
         (Some(multisig_config), keys)
     } else {
         println!("✓ 商户使用单签地址");
 
         // Parse single private key
-        let key_str = config.merchant.private_key.as_ref()
+        let key_str = config
+            .merchant
+            .private_key
+            .as_ref()
             .ok_or_else(|| anyhow!("Merchant private_key is required"))?;
 
         let key_bytes = hex::decode(key_str.trim_start_matches("0x"))
@@ -125,28 +134,31 @@ pub async fn execute(
     println!("  - Outputs: {}", tx.outputs().len());
 
     // 4. Verify witness structure and determine sizes
-    let witness = tx.witnesses().get(0)
+    let witness = tx
+        .witnesses()
+        .get(0)
         .ok_or_else(|| anyhow!("Missing witness"))?;
     let witness_data = witness.raw_data();
 
     // Calculate expected witness size based on multisig config
-    let (merchant_sig_start, merchant_sig_size, expected_size) = if let Some(ref multisig_config) = merchant_multisig_config {
-        let config_data = multisig_config.to_witness_data();
-        let threshold = multisig_config.threshold() as usize;
-        let merchant_sigs_size = threshold * SIGNATURE_SIZE;
+    let (merchant_sig_start, merchant_sig_size, expected_size) =
+        if let Some(ref multisig_config) = merchant_multisig_config {
+            let config_data = multisig_config.to_witness_data();
+            let threshold = multisig_config.threshold() as usize;
+            let merchant_sigs_size = threshold * SIGNATURE_SIZE;
 
-        let start = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
-        let size = config_data.len() + merchant_sigs_size;
-        let total = start + size + SIGNATURE_SIZE;
+            let start = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
+            let size = config_data.len() + merchant_sigs_size;
+            let total = start + size + SIGNATURE_SIZE;
 
-        (start, size, total)
-    } else {
-        let start = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
-        let size = SIGNATURE_SIZE;
-        let total = start + size + SIGNATURE_SIZE;
+            (start, size, total)
+        } else {
+            let start = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
+            let size = SIGNATURE_SIZE;
+            let total = start + size + SIGNATURE_SIZE;
 
-        (start, size, total)
-    };
+            (start, size, total)
+        };
 
     if witness_data.len() != expected_size {
         return Err(anyhow!(

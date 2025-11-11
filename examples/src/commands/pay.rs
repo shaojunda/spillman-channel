@@ -11,8 +11,7 @@ use std::{fs, str::FromStr};
 
 use crate::{
     storage::tx_storage::generate_tx_filename,
-    tx_builder::commitment::build_commitment_transaction,
-    utils::config::load_config,
+    tx_builder::commitment::build_commitment_transaction, utils::config::load_config,
 };
 
 /// Channel information loaded from file
@@ -77,7 +76,8 @@ pub async fn execute(
         .map_err(|e| anyhow!("RPC error: {:?}", e))?
         .ok_or_else(|| anyhow!("Funding transaction not found on chain"))?;
 
-    let funding_tx_json = funding_tx_with_status.transaction
+    let funding_tx_json = funding_tx_with_status
+        .transaction
         .ok_or_else(|| anyhow!("Transaction view not found"))?;
 
     // Convert jsonrpc TransactionView to core TransactionView
@@ -96,37 +96,49 @@ pub async fn execute(
     let spillman_lock_cell = funding_tx
         .outputs()
         .get(channel_info.funding_output_index as usize)
-        .ok_or_else(|| anyhow!("Spillman Lock cell not found at output index {}",
-            channel_info.funding_output_index))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "Spillman Lock cell not found at output index {}",
+                channel_info.funding_output_index
+            )
+        })?;
 
     let spillman_lock_capacity: u64 = spillman_lock_cell.capacity().unpack();
     let spillman_lock_script = spillman_lock_cell.lock();
 
     // Check if this is an xUDT channel
-    let (xudt_type_script, xudt_total_amount) = if let Some(type_script) = spillman_lock_cell.type_().to_opt() {
-        // Extract xUDT amount from cell data
-        let cell_data = funding_tx
-            .outputs_data()
-            .get(channel_info.funding_output_index as usize)
-            .ok_or_else(|| anyhow!("Cell data not found"))?;
-        let data_bytes: Vec<u8> = cell_data.unpack();
+    let (xudt_type_script, xudt_total_amount) =
+        if let Some(type_script) = spillman_lock_cell.type_().to_opt() {
+            // Extract xUDT amount from cell data
+            let cell_data = funding_tx
+                .outputs_data()
+                .get(channel_info.funding_output_index as usize)
+                .ok_or_else(|| anyhow!("Cell data not found"))?;
+            let data_bytes: Vec<u8> = cell_data.unpack();
 
-        if data_bytes.len() >= 16 {
-            let xudt_amount = u128::from_le_bytes(
-                data_bytes[0..16].try_into()
-                    .map_err(|_| anyhow!("Failed to parse xUDT amount"))?
-            );
-            (Some(type_script), Some(xudt_amount))
+            if data_bytes.len() >= 16 {
+                let xudt_amount = u128::from_le_bytes(
+                    data_bytes[0..16]
+                        .try_into()
+                        .map_err(|_| anyhow!("Failed to parse xUDT amount"))?,
+                );
+                (Some(type_script), Some(xudt_amount))
+            } else {
+                return Err(anyhow!("Invalid xUDT data length: {}", data_bytes.len()));
+            }
         } else {
-            return Err(anyhow!("Invalid xUDT data length: {}", data_bytes.len()));
-        }
-    } else {
-        (None, None)
-    };
+            (None, None)
+        };
 
     println!("✓ Spillman Lock cell 信息:");
-    println!("  - Capacity: {}", HumanCapacity::from(spillman_lock_capacity));
-    println!("  - Script hash: {:#x}", spillman_lock_script.calc_script_hash());
+    println!(
+        "  - Capacity: {}",
+        HumanCapacity::from(spillman_lock_capacity)
+    );
+    println!(
+        "  - Script hash: {:#x}",
+        spillman_lock_script.calc_script_hash()
+    );
     if let Some(xudt_amount) = xudt_total_amount {
         println!("  - xUDT amount: {}", xudt_amount);
     }
@@ -134,10 +146,13 @@ pub async fn execute(
     // 3.5 Parse payment amount based on channel type
     let (payment_amount_shannons, xudt_payment_amount) = if xudt_type_script.is_some() {
         // xUDT channel: amount is xUDT quantity, need to convert using decimal
-        let usdi_config = config.usdi.as_ref()
+        let usdi_config = config
+            .usdi
+            .as_ref()
             .ok_or_else(|| anyhow!("xUDT channel detected but usdi config not found"))?;
 
-        let payment_amount_f64 = amount.parse::<f64>()
+        let payment_amount_f64 = amount
+            .parse::<f64>()
             .map_err(|e| anyhow!("Invalid xUDT amount '{}': {}", amount, e))?;
 
         let decimal = usdi_config.decimal;
@@ -145,8 +160,10 @@ pub async fn execute(
         let xudt_payment = ((payment_amount_f64 * multiplier as f64) as u128);
 
         println!("\n💰 xUDT 支付详情:");
-        println!("  - 支付 xUDT 数量: {} (decimal: {}, smallest unit: {})",
-                 payment_amount_f64, decimal, xudt_payment);
+        println!(
+            "  - 支付 xUDT 数量: {} (decimal: {}, smallest unit: {})",
+            payment_amount_f64, decimal, xudt_payment
+        );
 
         // Validate xUDT payment amount
         let xudt_total = xudt_total_amount.ok_or_else(|| anyhow!("xUDT total amount not found"))?;
@@ -189,7 +206,7 @@ pub async fn execute(
     // Add type script if xUDT channel
     let data_size = if let Some(ref type_script) = xudt_type_script {
         merchant_cell_builder = merchant_cell_builder.type_(Some(type_script.clone()).pack());
-        16  // 16 bytes for xUDT data
+        16 // 16 bytes for xUDT data
     } else {
         0
     };
@@ -216,15 +233,22 @@ pub async fn execute(
             ));
         }
 
-        println!("  - 商户最小占用容量: {}", HumanCapacity::from(merchant_min_capacity));
-        println!("  - 商户实际收到 CKB: {} ({} 支付 + {} 最小占用)",
+        println!(
+            "  - 商户最小占用容量: {}",
+            HumanCapacity::from(merchant_min_capacity)
+        );
+        println!(
+            "  - 商户实际收到 CKB: {} ({} 支付 + {} 最小占用)",
             HumanCapacity::from(merchant_total_capacity),
             HumanCapacity::from(payment_amount_shannons),
-            HumanCapacity::from(merchant_min_capacity));
+            HumanCapacity::from(merchant_min_capacity)
+        );
     } else {
         // xUDT channel: only show xUDT payment details
-        println!("  - 商户收到 CKB: {} (仅最小占用)",
-            HumanCapacity::from(merchant_min_capacity));
+        println!(
+            "  - 商户收到 CKB: {} (仅最小占用)",
+            HumanCapacity::from(merchant_min_capacity)
+        );
         if let Some(xudt_payment) = xudt_payment_amount {
             let xudt_total = xudt_total_amount.unwrap();
             let xudt_change = xudt_total - xudt_payment;
@@ -263,10 +287,15 @@ pub async fn execute(
     println!("  - 用户已签名，商户需要在结算时补充签名");
     println!("  - 商户可以随时广播此交易到链上结算");
     println!("\n🎯 商户结算命令：");
-    println!("  spillman-cli settle --tx-file {} --config {}", output_file, config_path);
+    println!(
+        "  spillman-cli settle --tx-file {} --config {}",
+        output_file, config_path
+    );
     println!("\n💸 继续支付（创建新的 commitment）：");
-    println!("  spillman-cli pay --amount <更大的金额> --channel-file {} --config {}",
-        channel_file, config_path);
+    println!(
+        "  spillman-cli pay --amount <更大的金额> --channel-file {} --config {}",
+        channel_file, config_path
+    );
     println!("\n⚠️  注意：每次支付的金额必须大于上一次！");
 
     Ok(())
@@ -277,8 +306,8 @@ fn load_channel_info(file_path: &str) -> Result<ChannelInfo> {
     let json = fs::read_to_string(file_path)
         .map_err(|e| anyhow!("Failed to read channel info file {}: {}", file_path, e))?;
 
-    let info: ChannelInfo = serde_json::from_str(&json)
-        .map_err(|e| anyhow!("Failed to parse channel info: {}", e))?;
+    let info: ChannelInfo =
+        serde_json::from_str(&json).map_err(|e| anyhow!("Failed to parse channel info: {}", e))?;
 
     Ok(info)
 }

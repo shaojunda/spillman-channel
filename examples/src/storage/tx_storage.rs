@@ -37,11 +37,7 @@ pub struct TransactionMetadata {
 }
 
 impl TransactionInfo {
-    pub fn new(
-        tx_type: &str,
-        transaction: TransactionView,
-        signed: bool,
-    ) -> Self {
+    pub fn new(tx_type: &str, transaction: TransactionView, signed: bool) -> Self {
         Self {
             tx_type: tx_type.to_string(),
             transaction: ckb_jsonrpc_types::TransactionView::from(transaction),

@@ -3,7 +3,6 @@
 /// This module provides common functions for calculating witness sizes
 /// for different signature types (single-sig vs multisig) used in
 /// Spillman Channel transactions.
-
 use ckb_sdk::unlock::MultisigConfig;
 
 /// Size of a single ECDSA signature (r + s + v)
@@ -35,7 +34,9 @@ pub const UNLOCK_TYPE_SIZE: usize = 1;
 /// let size = calculate_merchant_signature_size(Some(&config));
 /// // size = config_data.len() + 2 * SIGNATURE_SIZE
 /// ```
-pub fn calculate_merchant_signature_size(merchant_multisig_config: Option<&MultisigConfig>) -> usize {
+pub fn calculate_merchant_signature_size(
+    merchant_multisig_config: Option<&MultisigConfig>,
+) -> usize {
     if let Some(config) = merchant_multisig_config {
         // Multisig: config_data + threshold * SIGNATURE_SIZE bytes signatures
         let config_data = config.to_witness_data();
@@ -80,7 +81,9 @@ pub fn calculate_refund_witness_size(merchant_multisig_config: Option<&MultisigC
 ///
 /// # Returns
 /// Total witness size in bytes
-pub fn calculate_commitment_witness_size(merchant_multisig_config: Option<&MultisigConfig>) -> usize {
+pub fn calculate_commitment_witness_size(
+    merchant_multisig_config: Option<&MultisigConfig>,
+) -> usize {
     let base_size = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
     let user_sig_size = SIGNATURE_SIZE;
     let merchant_sig_size = calculate_merchant_signature_size(merchant_multisig_config);
@@ -102,14 +105,19 @@ mod tests {
     fn test_refund_witness_size_single_sig() {
         // Single-sig: EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE = 147 bytes
         let size = calculate_refund_witness_size(None);
-        assert_eq!(size, EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE);
+        assert_eq!(
+            size,
+            EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE
+        );
     }
 
     #[test]
     fn test_commitment_witness_size_single_sig() {
         // Single-sig: EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE = 147 bytes
         let size = calculate_commitment_witness_size(None);
-        assert_eq!(size, EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE);
+        assert_eq!(
+            size,
+            EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE
+        );
     }
 }
-

@@ -82,14 +82,14 @@ impl KeyConfig {
     pub fn get_secret_keys(&self) -> Result<Vec<secp256k1::SecretKey>> {
         if let Some(keys) = &self.private_keys {
             // 多签模式
-            keys.iter()
-                .map(|k| Self::parse_secret_key(k))
-                .collect()
+            keys.iter().map(|k| Self::parse_secret_key(k)).collect()
         } else if let Some(key) = &self.private_key {
             // 单签模式（向后兼容）
             Ok(vec![Self::parse_secret_key(key)?])
         } else {
-            Err(anyhow!("Neither private_key nor private_keys is configured"))
+            Err(anyhow!(
+                "Neither private_key nor private_keys is configured"
+            ))
         }
     }
 
@@ -122,12 +122,12 @@ impl KeyConfig {
 
         // 验证多签配置
         if let Some(keys) = &self.private_keys {
-            let threshold = self.multisig_threshold.ok_or_else(|| {
-                anyhow!("{}: multisig_threshold is required for multisig", name)
-            })?;
-            let total = self.multisig_total.ok_or_else(|| {
-                anyhow!("{}: multisig_total is required for multisig", name)
-            })?;
+            let threshold = self
+                .multisig_threshold
+                .ok_or_else(|| anyhow!("{}: multisig_threshold is required for multisig", name))?;
+            let total = self
+                .multisig_total
+                .ok_or_else(|| anyhow!("{}: multisig_total is required for multisig", name))?;
 
             if threshold == 0 || threshold > total {
                 return Err(anyhow!(

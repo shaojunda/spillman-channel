@@ -23,18 +23,16 @@ fn main() {
     .expect("write to auth_code_hash.rs");
 
     // Generate SECP256K1_CODE_HASH
-    let secp256k1_code_hash = hex::decode(
-        "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-    ).expect("decode secp256k1 code hash");
+    let secp256k1_code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+            .expect("decode secp256k1 code hash");
 
     let out_path = Path::new(&env::var("OUT_DIR").unwrap()).join("secp256k1_code_hash.rs");
-    let mut out_file = BufWriter::new(File::create(out_path).expect("create secp256k1_code_hash.rs"));
+    let mut out_file =
+        BufWriter::new(File::create(out_path).expect("create secp256k1_code_hash.rs"));
 
-    write!(
-        &mut out_file,
-        "pub const SECP256K1_CODE_HASH: [u8; 32] = ["
-    )
-    .expect("write to secp256k1_code_hash.rs");
+    write!(&mut out_file, "pub const SECP256K1_CODE_HASH: [u8; 32] = [")
+        .expect("write to secp256k1_code_hash.rs");
 
     for (i, byte) in secp256k1_code_hash.iter().enumerate() {
         if i > 0 {
@@ -46,9 +44,9 @@ fn main() {
     writeln!(&mut out_file, "];").expect("write closing bracket");
 
     // Generate SECP256K1_MULTISIG_CODE_HASH
-    let secp256k1_multisig_code_hash = hex::decode(
-        "5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8"
-    ).expect("decode secp256k1 multisig code hash");
+    let secp256k1_multisig_code_hash =
+        hex::decode("5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8")
+            .expect("decode secp256k1 multisig code hash");
 
     write!(
         &mut out_file,
@@ -66,9 +64,9 @@ fn main() {
     writeln!(&mut out_file, "];").expect("write closing bracket");
 
     // Generate SECP256K1_MULTISIG_V2_CODE_HASH
-    let secp256k1_multisig_v2_code_hash = hex::decode(
-        "36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29"
-    ).expect("decode secp256k1 multisig v2 code hash");
+    let secp256k1_multisig_v2_code_hash =
+        hex::decode("36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29")
+            .expect("decode secp256k1 multisig v2 code hash");
 
     write!(
         &mut out_file,

@@ -54,15 +54,11 @@
 ///     "output/refund_tx.json",
 /// ).await?;
 /// ```
-
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
 use ckb_sdk::{
-    traits::{
-        CellDepResolver, HeaderDepResolver,
-        TransactionDependencyProvider,
-    },
+    traits::{CellDepResolver, HeaderDepResolver, TransactionDependencyProvider},
     tx_builder::{TxBuilder, TxBuilderError},
     Address, HumanCapacity,
 };
@@ -90,7 +86,9 @@ const REFUND_WITNESS_SIZE_SINGLE_SIG: usize = 147; // 16 + 1 + 65 + 65
 ///
 /// # Returns
 /// Total witness size in bytes
-fn calculate_refund_witness_size(merchant_multisig_config: Option<&ckb_sdk::unlock::MultisigConfig>) -> usize {
+fn calculate_refund_witness_size(
+    merchant_multisig_config: Option<&ckb_sdk::unlock::MultisigConfig>,
+) -> usize {
     use crate::tx_builder::witness_utils;
     witness_utils::calculate_refund_witness_size(merchant_multisig_config)
 }
@@ -158,11 +156,7 @@ impl RefundTx {
     }
 
     /// Build the refund transaction
-    pub async fn build(
-        self,
-        request: RefundRequest,
-        context: RefundContext,
-    ) -> Result<Self> {
+    pub async fn build(self, request: RefundRequest, context: RefundContext) -> Result<Self> {
         let builder = RefundTxBuilder {
             refund_tx: self,
             request,
@@ -185,10 +179,13 @@ impl RefundTx {
         spillman_lock_args: &[u8],
         merchant_multisig_config: Option<&ckb_sdk::unlock::MultisigConfig>,
     ) -> Result<Self> {
-        let tx = self.take().ok_or_else(|| anyhow!("No transaction to sign"))?;
+        let tx = self
+            .take()
+            .ok_or_else(|| anyhow!("No transaction to sign"))?;
 
         // Verify pubkey hashes match Spillman Lock args
-        let user_pubkey = user_privkey.pubkey()
+        let user_pubkey = user_privkey
+            .pubkey()
             .map_err(|e| anyhow!("Failed to get user pubkey: {:?}", e))?;
 
         let user_pubkey_hash_from_privkey = pubkey_hash(&user_pubkey);
@@ -204,7 +201,8 @@ impl RefundTx {
             let hash = blake2b_256(&config_data);
             let merchant_multisig_hash = &hash[0..20];
             if merchant_multisig_hash != expected_merchant_hash {
-                return Err(anyhow!("Merchant multisig hash mismatch! Expected: {}, Got: {}",
+                return Err(anyhow!(
+                    "Merchant multisig hash mismatch! Expected: {}, Got: {}",
                     hex::encode(expected_merchant_hash),
                     hex::encode(merchant_multisig_hash)
                 ));
@@ -212,10 +210,13 @@ impl RefundTx {
         } else {
             // For single-sig: merchant_hash is blake160(pubkey)
             if merchant_secret_keys.len() != 1 {
-                return Err(anyhow!("Single-sig merchant should have exactly 1 secret key"));
+                return Err(anyhow!(
+                    "Single-sig merchant should have exactly 1 secret key"
+                ));
             }
             let secp = secp256k1::Secp256k1::new();
-            let merchant_pubkey_secp = secp256k1::PublicKey::from_secret_key(&secp, &merchant_secret_keys[0]);
+            let merchant_pubkey_secp =
+                secp256k1::PublicKey::from_secret_key(&secp, &merchant_secret_keys[0]);
             let merchant_pubkey_bytes = merchant_pubkey_secp.serialize();
             use ckb_hash::blake2b_256;
             let merchant_pubkey_hash_from_privkey = &blake2b_256(&merchant_pubkey_bytes)[0..20];
@@ -237,7 +238,11 @@ impl RefundTx {
             // Multisig merchant: collect threshold number of signatures
             let threshold = multisig_config.threshold() as usize;
             if merchant_secret_keys.len() < threshold {
-                return Err(anyhow!("Not enough merchant secret keys: need {}, got {}", threshold, merchant_secret_keys.len()));
+                return Err(anyhow!(
+                    "Not enough merchant secret keys: need {}, got {}",
+                    threshold,
+                    merchant_secret_keys.len()
+                ));
             }
 
             let mut merchant_signatures = Vec::new();
@@ -333,31 +338,37 @@ impl TxBuilder for RefundTxBuilder {
         _tx_dep_provider: &dyn TransactionDependencyProvider,
     ) -> Result<TransactionView, TxBuilderError> {
         // Get Spillman Lock cell from funding tx output 0
-        let spillman_cell = self.request.funding_tx
-            .outputs()
-            .get(0)
-            .ok_or_else(|| TxBuilderError::Other(anyhow!("Funding transaction has no output 0")))?;
+        let spillman_cell =
+            self.request.funding_tx.outputs().get(0).ok_or_else(|| {
+                TxBuilderError::Other(anyhow!("Funding transaction has no output 0"))
+            })?;
 
         let spillman_capacity: u64 = spillman_cell.capacity().unpack();
 
         // Check if this is an xUDT channel
         let xudt_info = if let Some(type_script) = spillman_cell.type_().to_opt() {
             // Extract xUDT amount from funding cell data
-            let funding_data = self.request.funding_tx
+            let funding_data = self
+                .request
+                .funding_tx
                 .outputs_data()
                 .get(0)
-                .ok_or_else(|| TxBuilderError::Other(anyhow!("Funding transaction has no output data 0")))?;
+                .ok_or_else(|| {
+                    TxBuilderError::Other(anyhow!("Funding transaction has no output data 0"))
+                })?;
             let data_bytes: Vec<u8> = funding_data.unpack();
 
             if data_bytes.len() >= 16 {
-                let xudt_amount = u128::from_le_bytes(
-                    data_bytes[0..16]
-                        .try_into()
-                        .map_err(|_| TxBuilderError::Other(anyhow!("Failed to parse xUDT amount")))?
-                );
+                let xudt_amount =
+                    u128::from_le_bytes(data_bytes[0..16].try_into().map_err(|_| {
+                        TxBuilderError::Other(anyhow!("Failed to parse xUDT amount"))
+                    })?);
                 Some((type_script, xudt_amount))
             } else {
-                return Err(TxBuilderError::Other(anyhow!("Invalid xUDT data length: {}", data_bytes.len())));
+                return Err(TxBuilderError::Other(anyhow!(
+                    "Invalid xUDT data length: {}",
+                    data_bytes.len()
+                )));
             }
         } else {
             None
@@ -374,11 +385,9 @@ impl TxBuilder for RefundTxBuilder {
         }
 
         // Extract timeout_since from args (bytes 40-48)
-        let timeout_since = u64::from_le_bytes(
-            args_bytes[40..48]
-                .try_into()
-                .map_err(|_| TxBuilderError::Other(anyhow!("Failed to parse timeout_since from args")))?,
-        );
+        let timeout_since = u64::from_le_bytes(args_bytes[40..48].try_into().map_err(|_| {
+            TxBuilderError::Other(anyhow!("Failed to parse timeout_since from args"))
+        })?);
 
         // Build input with timeout since
         let input = CellInput::new_builder()
@@ -399,8 +408,9 @@ impl TxBuilder for RefundTxBuilder {
 
             // If xUDT channel, merchant cell also needs type script
             let data_size = if let Some((ref type_script, _)) = xudt_info {
-                merchant_cell_builder = merchant_cell_builder.type_(Some(type_script.clone()).pack());
-                16  // 16 bytes for xUDT data
+                merchant_cell_builder =
+                    merchant_cell_builder.type_(Some(type_script.clone()).pack());
+                16 // 16 bytes for xUDT data
             } else {
                 0
             };
@@ -421,11 +431,15 @@ impl TxBuilder for RefundTxBuilder {
             spillman_capacity
                 .checked_sub(merchant_capacity)
                 .and_then(|c| c.checked_sub(estimated_fee))
-                .ok_or_else(|| TxBuilderError::Other(anyhow!("Not enough capacity for refund outputs and fee")))?
+                .ok_or_else(|| {
+                    TxBuilderError::Other(anyhow!("Not enough capacity for refund outputs and fee"))
+                })?
         } else {
             spillman_capacity
                 .checked_sub(estimated_fee)
-                .ok_or_else(|| TxBuilderError::Other(anyhow!("Not enough capacity for refund and fee")))?
+                .ok_or_else(|| {
+                    TxBuilderError::Other(anyhow!("Not enough capacity for refund and fee"))
+                })?
         };
 
         // Build outputs
@@ -479,7 +493,8 @@ impl TxBuilder for RefundTxBuilder {
         }
 
         // Build witness placeholder (size depends on merchant's signature type)
-        let witness_size = calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
+        let witness_size =
+            calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
         let witness_placeholder = vec![0u8; witness_size];
 
         let mut tx_builder = Transaction::default()
@@ -507,7 +522,9 @@ impl RefundTxBuilder {
     /// Internal build method with iterative fee calculation
     async fn build_internal(self) -> Result<RefundTx> {
         // Get spillman cell capacity
-        let spillman_cell = self.request.funding_tx
+        let spillman_cell = self
+            .request
+            .funding_tx
             .outputs()
             .get(0)
             .ok_or_else(|| anyhow!("Funding transaction has no output 0"))?;
@@ -526,7 +543,7 @@ impl RefundTxBuilder {
             let data_size = if has_xudt {
                 let type_script = spillman_cell.type_().to_opt().unwrap();
                 merchant_cell_builder = merchant_cell_builder.type_(Some(type_script).pack());
-                16  // 16 bytes for xUDT data
+                16 // 16 bytes for xUDT data
             } else {
                 0
             };
@@ -588,8 +605,14 @@ impl RefundTxBuilder {
     }
 
     /// Helper to build transaction with specific capacities
-    fn build_tx_with_capacity(&self, user_capacity: u64, merchant_capacity: u64) -> Result<TransactionView> {
-        let spillman_cell = self.request.funding_tx
+    fn build_tx_with_capacity(
+        &self,
+        user_capacity: u64,
+        merchant_capacity: u64,
+    ) -> Result<TransactionView> {
+        let spillman_cell = self
+            .request
+            .funding_tx
             .outputs()
             .get(0)
             .ok_or_else(|| anyhow!("Funding transaction has no output 0"))?;
@@ -597,7 +620,9 @@ impl RefundTxBuilder {
         // Check if this is an xUDT channel
         let xudt_info = if let Some(type_script) = spillman_cell.type_().to_opt() {
             // Extract xUDT amount from funding cell data
-            let funding_data = self.request.funding_tx
+            let funding_data = self
+                .request
+                .funding_tx
                 .outputs_data()
                 .get(0)
                 .ok_or_else(|| anyhow!("Funding transaction has no output data 0"))?;
@@ -607,7 +632,7 @@ impl RefundTxBuilder {
                 let xudt_amount = u128::from_le_bytes(
                     data_bytes[0..16]
                         .try_into()
-                        .map_err(|_| anyhow!("Failed to parse xUDT amount"))?
+                        .map_err(|_| anyhow!("Failed to parse xUDT amount"))?,
                 );
                 Some((type_script, xudt_amount))
             } else {
@@ -685,7 +710,8 @@ impl RefundTxBuilder {
             }
         }
 
-        let witness_size = calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
+        let witness_size =
+            calculate_refund_witness_size(self.context.merchant_multisig_config.as_ref());
         let witness_placeholder = vec![0u8; witness_size];
 
         let mut tx_builder = Transaction::default()
@@ -775,14 +801,22 @@ pub async fn build_refund_transaction(
         .build();
 
     // Parse keys using ckb-crypto for Spillman Lock signing
-    let user_privkey = Privkey::from_str(config.user.private_key.as_ref().expect("User private_key is required"))
-        .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
+    let user_privkey = Privkey::from_str(
+        config
+            .user
+            .private_key
+            .as_ref()
+            .expect("User private_key is required"),
+    )
+    .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
 
     // Parse merchant keys and multisig config
     let (merchant_privkeys, merchant_multisig_config) = if config.merchant.is_multisig() {
         // Multisig merchant
         let secret_keys = config.merchant.get_secret_keys()?;
-        let (threshold, total) = config.merchant.get_multisig_config()
+        let (threshold, total) = config
+            .merchant
+            .get_multisig_config()
             .ok_or_else(|| anyhow!("Merchant multisig config is invalid"))?;
 
         use crate::tx_builder::funding_v2::build_multisig_config;
@@ -791,7 +825,10 @@ pub async fn build_refund_transaction(
         (Some(secret_keys), Some(multisig_config))
     } else {
         // Single-sig merchant
-        let merchant_privkey_str = config.merchant.private_key.as_ref()
+        let merchant_privkey_str = config
+            .merchant
+            .private_key
+            .as_ref()
             .ok_or_else(|| anyhow!("Merchant private_key is required for single-sig"))?;
         let merchant_secret_key = {
             let key_hex = merchant_privkey_str.trim_start_matches("0x");
@@ -839,7 +876,11 @@ pub async fn build_refund_transaction(
     };
 
     // Create user secret key for RefundContext
-    let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
+    let user_privkey_hex = config
+        .user
+        .private_key
+        .as_ref()
+        .expect("User private_key is required");
     let user_privkey_bytes = hex::decode(user_privkey_hex.trim_start_matches("0x"))?;
     let user_secret_key = secp256k1::SecretKey::from_slice(&user_privkey_bytes)?;
 
@@ -876,7 +917,9 @@ pub async fn build_refund_transaction(
         merchant_multisig_config_for_sign.as_ref(),
     )?;
 
-    let tx = refund_tx.into_inner().ok_or_else(|| anyhow!("No transaction"))?;
+    let tx = refund_tx
+        .into_inner()
+        .ok_or_else(|| anyhow!("No transaction"))?;
     let tx_hash = tx.hash();
 
     // Print summary
@@ -930,4 +973,3 @@ mod tests {
         );
     }
 }
-

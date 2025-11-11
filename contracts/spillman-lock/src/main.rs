@@ -331,8 +331,8 @@ fn verify_timeout_path(
 
     // Security: Only proceed with verification if since >= timeout
     if since >= timeout_since {
-         // Verify refund output structure
-         verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, merchant_algorithm_id)?;
+        // Verify refund output structure
+        verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, merchant_algorithm_id)?;
 
         // Verify user signature (always single-sig)
         verify_signature_with_auth(

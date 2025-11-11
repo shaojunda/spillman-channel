@@ -6,7 +6,9 @@ use std::str::FromStr;
 
 use crate::tx_builder::funding::{build_cofund_funding_transaction, build_funding_transaction};
 use crate::tx_builder::funding_v2;
-use crate::tx_builder::spillman_lock::{build_spillman_lock_script, build_spillman_lock_script_with_hash};
+use crate::tx_builder::spillman_lock::{
+    build_spillman_lock_script, build_spillman_lock_script_with_hash,
+};
 use crate::utils::config::load_config;
 use crate::utils::crypto::parse_privkey;
 
@@ -25,7 +27,7 @@ struct ChannelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     xudt_type_script: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    xudt_amount: Option<String>,  // Store as string to avoid u128 parsing issues
+    xudt_amount: Option<String>, // Store as string to avoid u128 parsing issues
 }
 
 pub async fn execute(
@@ -55,7 +57,13 @@ pub async fn execute(
     println!("\n👤 解析用户和商户信息...");
 
     // Parse user (must be single-sig for now)
-    let user_privkey = parse_privkey(config.user.private_key.as_ref().expect("User private_key is required"))?;
+    let user_privkey = parse_privkey(
+        config
+            .user
+            .private_key
+            .as_ref()
+            .expect("User private_key is required"),
+    )?;
     let user_pubkey = user_privkey.pubkey()?;
 
     println!("✓ 用户地址: {}", user_address);
@@ -64,13 +72,16 @@ pub async fn execute(
     // Parse merchant (can be single-sig or multisig)
     let merchant_pubkey_hash = if config.merchant.is_multisig() {
         // Multisig: use blake160(multisig_config) as lock arg
-        println!("✓ 商户模式: 多签 ({}-of-{})",
+        println!(
+            "✓ 商户模式: 多签 ({}-of-{})",
             config.merchant.multisig_threshold.unwrap(),
             config.merchant.multisig_total.unwrap()
         );
 
         let merchant_secret_keys = config.merchant.get_secret_keys()?;
-        let (threshold, total) = config.merchant.get_multisig_config()
+        let (threshold, total) = config
+            .merchant
+            .get_multisig_config()
             .ok_or_else(|| anyhow!("Merchant multisig config is invalid"))?;
 
         // Build multisig config
@@ -87,7 +98,13 @@ pub async fn execute(
     } else {
         // Single-sig: use pubkey_hash(merchant_pubkey)
         println!("✓ 商户模式: 单签");
-        let merchant_privkey = parse_privkey(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))?;
+        let merchant_privkey = parse_privkey(
+            config
+                .merchant
+                .private_key
+                .as_ref()
+                .expect("Merchant private_key is required"),
+        )?;
         let merchant_pubkey = merchant_privkey.pubkey()?;
         println!("✓ 商户公钥: {}", hex::encode(merchant_pubkey.serialize()));
 
@@ -112,13 +129,16 @@ pub async fn execute(
         .as_secs();
 
     println!("✓ RPC URL: {}", config.network.rpc_url);
-    println!("✓ 当前时间戳: {} ({} UTC)", current_timestamp,
+    println!(
+        "✓ 当前时间戳: {} ({} UTC)",
+        current_timestamp,
         chrono::DateTime::from_timestamp(current_timestamp as i64, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
     );
     println!("✓ 超时时间戳: {}", timeout_timestamp);
-    println!("  超时时间: {}",
+    println!(
+        "  超时时间: {}",
         chrono::DateTime::from_timestamp(timeout_timestamp as i64, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
@@ -137,7 +157,8 @@ pub async fn execute(
             timeout_timestamp
         ));
     }
-    println!("✓ 超时时间验证通过 (距离当前时间 {} 秒 ≈ {} 分钟)",
+    println!(
+        "✓ 超时时间验证通过 (距离当前时间 {} 秒 ≈ {} 分钟)",
         timeout_timestamp - current_timestamp,
         (timeout_timestamp - current_timestamp) / 60
     );
@@ -153,7 +174,10 @@ pub async fn execute(
 
     let script_hash = spillman_lock_script.calc_script_hash();
     println!("✓ Spillman Lock script hash: {:#x}", script_hash);
-    println!("✓ Lock script args 长度: {} bytes", spillman_lock_script.args().raw_data().len());
+    println!(
+        "✓ Lock script args 长度: {} bytes",
+        spillman_lock_script.args().raw_data().len()
+    );
 
     // 5. Build and sign funding transaction
     println!("\n📝 构建并签名 Funding Transaction...");
@@ -164,11 +188,12 @@ pub async fn execute(
     fs::create_dir_all(&secrets_dir)?;
 
     let funding_tx_path = secrets_dir.join("funding_tx_signed.json");
-    let funding_info_path = funding_tx_path.to_str()
+    let funding_info_path = funding_tx_path
+        .to_str()
         .ok_or_else(|| anyhow!("invalid output path"))?;
 
-    let user_addr_parsed = Address::from_str(user_address)
-        .map_err(|e| anyhow!("invalid user address: {}", e))?;
+    let user_addr_parsed =
+        Address::from_str(user_address).map_err(|e| anyhow!("invalid user address: {}", e))?;
 
     let (funding_tx_hash, funding_output_index) = if co_fund {
         // Co-fund mode: User + Merchant共同出资
@@ -203,7 +228,9 @@ pub async fn execute(
     println!("\n💾 保存通道信息...");
     let channel_info = ChannelInfo {
         user_address: user_address.to_string(),
-        merchant_address: merchant_address.unwrap_or(&config.merchant.address).to_string(),
+        merchant_address: merchant_address
+            .unwrap_or(&config.merchant.address)
+            .to_string(),
         capacity_ckb: capacity,
         timeout_epochs: 0, // Deprecated, keeping for backwards compatibility
         current_timestamp,
@@ -211,8 +238,8 @@ pub async fn execute(
         spillman_lock_script_hash: format!("{:#x}", script_hash),
         funding_tx_hash: format!("{:#x}", funding_tx_hash),
         funding_output_index,
-        xudt_type_script: None,  // TODO: Will be filled in xUDT mode
-        xudt_amount: None,       // TODO: Will be filled in xUDT mode
+        xudt_type_script: None, // TODO: Will be filled in xUDT mode
+        xudt_amount: None,      // TODO: Will be filled in xUDT mode
     };
 
     let channel_info_json = serde_json::to_string_pretty(&channel_info)?;
@@ -272,7 +299,13 @@ pub async fn execute_v2(
     println!("\n👤 解析用户和商户信息...");
 
     // Parse user (must be single-sig for now)
-    let user_privkey = parse_privkey(config.user.private_key.as_ref().expect("User private_key is required"))?;
+    let user_privkey = parse_privkey(
+        config
+            .user
+            .private_key
+            .as_ref()
+            .expect("User private_key is required"),
+    )?;
     let user_pubkey = user_privkey.pubkey()?;
 
     println!("✓ 用户地址: {}", user_address);
@@ -281,13 +314,16 @@ pub async fn execute_v2(
     // Parse merchant (can be single-sig or multisig)
     let merchant_pubkey_hash = if config.merchant.is_multisig() {
         // Multisig: use blake160(multisig_config) as lock arg
-        println!("✓ 商户模式: 多签 ({}-of-{})",
+        println!(
+            "✓ 商户模式: 多签 ({}-of-{})",
             config.merchant.multisig_threshold.unwrap(),
             config.merchant.multisig_total.unwrap()
         );
 
         let merchant_secret_keys = config.merchant.get_secret_keys()?;
-        let (threshold, total) = config.merchant.get_multisig_config()
+        let (threshold, total) = config
+            .merchant
+            .get_multisig_config()
             .ok_or_else(|| anyhow!("Merchant multisig config is invalid"))?;
 
         // Build multisig config
@@ -304,7 +340,13 @@ pub async fn execute_v2(
     } else {
         // Single-sig: use pubkey_hash(merchant_pubkey)
         println!("✓ 商户模式: 单签");
-        let merchant_privkey = parse_privkey(config.merchant.private_key.as_ref().expect("Merchant private_key is required"))?;
+        let merchant_privkey = parse_privkey(
+            config
+                .merchant
+                .private_key
+                .as_ref()
+                .expect("Merchant private_key is required"),
+        )?;
         let merchant_pubkey = merchant_privkey.pubkey()?;
         println!("✓ 商户公钥: {}", hex::encode(merchant_pubkey.serialize()));
 
@@ -329,13 +371,16 @@ pub async fn execute_v2(
         .as_secs();
 
     println!("✓ RPC URL: {}", config.network.rpc_url);
-    println!("✓ 当前时间戳: {} ({} UTC)", current_timestamp,
+    println!(
+        "✓ 当前时间戳: {} ({} UTC)",
+        current_timestamp,
         chrono::DateTime::from_timestamp(current_timestamp as i64, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
     );
     println!("✓ 超时时间戳: {}", timeout_timestamp);
-    println!("  超时时间: {}",
+    println!(
+        "  超时时间: {}",
         chrono::DateTime::from_timestamp(timeout_timestamp as i64, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| "Invalid".to_string())
@@ -370,7 +415,10 @@ pub async fn execute_v2(
 
     let script_hash = spillman_lock_script.calc_script_hash();
     println!("✓ Spillman Lock script hash: {:#x}", script_hash);
-    println!("✓ Lock script args 长度: {} bytes", spillman_lock_script.args().raw_data().len());
+    println!(
+        "✓ Lock script args 长度: {} bytes",
+        spillman_lock_script.args().raw_data().len()
+    );
 
     // 5. Build and sign funding transaction
     println!("\n📝 构建并签名 Funding Transaction (v2)...");
@@ -381,11 +429,12 @@ pub async fn execute_v2(
     fs::create_dir_all(&secrets_dir)?;
 
     let funding_tx_path = secrets_dir.join("funding_tx_signed.json");
-    let funding_info_path = funding_tx_path.to_str()
+    let funding_info_path = funding_tx_path
+        .to_str()
         .ok_or_else(|| anyhow!("invalid output path"))?;
 
-    let user_addr_parsed = Address::from_str(user_address)
-        .map_err(|e| anyhow!("invalid user address: {}", e))?;
+    let user_addr_parsed =
+        Address::from_str(user_address).map_err(|e| anyhow!("invalid user address: {}", e))?;
 
     // Convert capacity from CKB to HumanCapacity
     use ckb_sdk::HumanCapacity;
@@ -398,7 +447,10 @@ pub async fn execute_v2(
             let decimal = usdi_config.decimal;
             let multiplier = 10u128.pow(decimal as u32);
             let smallest_unit = amount * multiplier;
-            println!("  - xUDT amount: {} (decimal: {}, smallest unit: {})", amount, decimal, smallest_unit);
+            println!(
+                "  - xUDT amount: {} (decimal: {}, smallest unit: {})",
+                amount, decimal, smallest_unit
+            );
             Some(smallest_unit)
         } else {
             return Err(anyhow!("xUDT amount specified but usdi config not found"));
@@ -415,7 +467,11 @@ pub async fn execute_v2(
 
         // For co-funding with xUDT: merchant contributes 0 xUDT, user contributes all
         let user_xudt_amount = xudt_amount_smallest_unit;
-        let merchant_xudt_amount = if xudt_amount_smallest_unit.is_some() { Some(0u128) } else { None };
+        let merchant_xudt_amount = if xudt_amount_smallest_unit.is_some() {
+            Some(0u128)
+        } else {
+            None
+        };
 
         funding_v2::build_cofund_funding_transaction(
             &config,
@@ -453,11 +509,12 @@ pub async fn execute_v2(
             use ckb_types::prelude::*;
             use std::str::FromStr;
 
-            let code_hash = ckb_types::H256::from_str(usdi_config.code_hash.trim_start_matches("0x"))
-                .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
+            let code_hash =
+                ckb_types::H256::from_str(usdi_config.code_hash.trim_start_matches("0x"))
+                    .map_err(|e| anyhow!("Invalid code_hash: {}", e))?;
             let args = ckb_types::bytes::Bytes::from(
                 hex::decode(usdi_config.args.trim_start_matches("0x"))
-                    .map_err(|e| anyhow!("Invalid args hex: {}", e))?
+                    .map_err(|e| anyhow!("Invalid args hex: {}", e))?,
             );
 
             let hash_type = match usdi_config.hash_type.as_str() {
@@ -483,7 +540,9 @@ pub async fn execute_v2(
 
     let channel_info = ChannelInfo {
         user_address: user_address.to_string(),
-        merchant_address: merchant_address.unwrap_or(&config.merchant.address).to_string(),
+        merchant_address: merchant_address
+            .unwrap_or(&config.merchant.address)
+            .to_string(),
         capacity_ckb: capacity,
         timeout_epochs: 0, // Deprecated, keeping for backwards compatibility
         current_timestamp,
@@ -507,7 +566,8 @@ pub async fn execute_v2(
 
         // Load the saved transaction (TransactionView with hash)
         let funding_tx_json_str = fs::read_to_string(&funding_tx_path)?;
-        let funding_tx_json: ckb_jsonrpc_types::TransactionView = serde_json::from_str(&funding_tx_json_str)?;
+        let funding_tx_json: ckb_jsonrpc_types::TransactionView =
+            serde_json::from_str(&funding_tx_json_str)?;
 
         // Send transaction via RPC (use inner Transaction without hash)
         let rpc_client = ckb_sdk::rpc::CkbRpcClient::new(&config.network.rpc_url);
@@ -527,11 +587,17 @@ pub async fn execute_v2(
         println!("\n📌 下一步操作:");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!("\n🔍 查询交易状态:");
-        println!("   ckb-cli rpc get_transaction --hash {:#x}", broadcast_tx_hash);
+        println!(
+            "   ckb-cli rpc get_transaction --hash {:#x}",
+            broadcast_tx_hash
+        );
         println!("\n⏳ 等待交易上链确认...");
         println!("   交易确认后即可开始支付");
         println!("\n💸 创建支付:");
-        println!("   spillman-cli pay --amount <CKB数量> --channel-file {}", channel_info_path.display());
+        println!(
+            "   spillman-cli pay --amount <CKB数量> --channel-file {}",
+            channel_info_path.display()
+        );
     } else {
         // 8. Build refund transaction template
         println!("\n📝 构建 Refund Transaction 模板...");

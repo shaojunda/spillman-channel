@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Pubkey;
-use ckb_sdk::{Address, Since, SinceType, constants::MultisigScript};
+use ckb_sdk::{constants::MultisigScript, Address, Since, SinceType};
 use ckb_types::{bytes::Bytes, core::ScriptHashType, packed, prelude::*, H256};
 use std::str::FromStr;
 
@@ -28,9 +28,13 @@ fn detect_multisig_algorithm_id(config: &Config) -> Result<u8> {
     let legacy_script_id = MultisigScript::Legacy.script_id();
     let v2_script_id = MultisigScript::V2.script_id();
 
-    if code_hash == legacy_script_id.code_hash && lock_script.hash_type() == legacy_script_id.hash_type.into() {
+    if code_hash == legacy_script_id.code_hash
+        && lock_script.hash_type() == legacy_script_id.hash_type.into()
+    {
         Ok(6) // Legacy multisig
-    } else if code_hash == v2_script_id.code_hash && lock_script.hash_type() == v2_script_id.hash_type.into() {
+    } else if code_hash == v2_script_id.code_hash
+        && lock_script.hash_type() == v2_script_id.hash_type.into()
+    {
         Ok(7) // V2 multisig
     } else {
         Err(anyhow!("Unknown multisig type for merchant address"))
@@ -51,12 +55,21 @@ pub fn build_spillman_lock_script(
     // SinceType::Timestamp uses median time to avoid miner manipulation
     let timeout_since = Since::new(SinceType::Timestamp, timeout_timestamp, false);
 
-    let args = SpillmanLockArgs::new(merchant_pubkey_hash, user_pubkey_hash, timeout_since.value());
+    let args = SpillmanLockArgs::new(
+        merchant_pubkey_hash,
+        user_pubkey_hash,
+        timeout_since.value(),
+    );
     let args_bytes = args.to_bytes();
 
     let code_hash_str = config.spillman_lock.code_hash.trim_start_matches("0x");
-    let code_hash = H256::from_str(code_hash_str)
-        .map_err(|e| anyhow!("Invalid code hash '{}': {}", config.spillman_lock.code_hash, e))?;
+    let code_hash = H256::from_str(code_hash_str).map_err(|e| {
+        anyhow!(
+            "Invalid code hash '{}': {}",
+            config.spillman_lock.code_hash,
+            e
+        )
+    })?;
     let hash_type = match config.spillman_lock.hash_type.as_str() {
         "data" => ScriptHashType::Data,
         "type" => ScriptHashType::Type,
@@ -124,8 +137,13 @@ pub fn build_spillman_lock_script_with_hash_and_algorithm(
     let args_bytes = args.to_bytes();
 
     let code_hash_str = config.spillman_lock.code_hash.trim_start_matches("0x");
-    let code_hash = H256::from_str(code_hash_str)
-        .map_err(|e| anyhow!("Invalid code hash '{}': {}", config.spillman_lock.code_hash, e))?;
+    let code_hash = H256::from_str(code_hash_str).map_err(|e| {
+        anyhow!(
+            "Invalid code hash '{}': {}",
+            config.spillman_lock.code_hash,
+            e
+        )
+    })?;
     let hash_type = match config.spillman_lock.hash_type.as_str() {
         "data" => ScriptHashType::Data,
         "type" => ScriptHashType::Type,

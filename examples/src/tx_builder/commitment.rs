@@ -24,7 +24,6 @@
 ///
 /// 1. **User creates commitment**: User signs the transaction with their payment
 /// 2. **Merchant settles**: Merchant adds their signature and broadcasts to chain
-
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
@@ -38,12 +37,9 @@ use ckb_types::{
 };
 use std::str::FromStr;
 
-use crate::{
-    utils::config::Config,
-    tx_builder::funding_v2::build_multisig_config,
-};
+use crate::{tx_builder::funding_v2::build_multisig_config, utils::config::Config};
 
-use crate::tx_builder::witness_utils::{SIGNATURE_SIZE, EMPTY_WITNESS_ARGS_SIZE, UNLOCK_TYPE_SIZE};
+use crate::tx_builder::witness_utils::{EMPTY_WITNESS_ARGS_SIZE, SIGNATURE_SIZE, UNLOCK_TYPE_SIZE};
 
 // Constants for witness structure
 const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
@@ -93,18 +89,31 @@ pub fn build_commitment_transaction(
     println!("📝 构建 Commitment 交易...");
 
     // Parse user private key from config
-    let user_privkey = Privkey::from_str(config.user.private_key.as_ref().expect("User private_key is required"))
-        .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
+    let user_privkey = Privkey::from_str(
+        config
+            .user
+            .private_key
+            .as_ref()
+            .expect("User private_key is required"),
+    )
+    .map_err(|e| anyhow!("Failed to parse user private key: {:?}", e))?;
 
     // Check if merchant uses multisig and build config if needed
     let merchant_multisig_config = if config.merchant.is_multisig() {
-        let threshold = config.merchant.multisig_threshold
+        let threshold = config
+            .merchant
+            .multisig_threshold
             .ok_or_else(|| anyhow!("Merchant multisig_threshold is required"))?;
-        let total = config.merchant.multisig_total
+        let total = config
+            .merchant
+            .multisig_total
             .ok_or_else(|| anyhow!("Merchant multisig_total is required"))?;
 
         // Parse merchant public keys (not private keys, just for config structure)
-        let privkeys = config.merchant.private_keys.as_ref()
+        let privkeys = config
+            .merchant
+            .private_keys
+            .as_ref()
             .ok_or_else(|| anyhow!("Merchant private_keys is required for multisig"))?;
 
         let parsed_keys: Result<Vec<secp256k1::SecretKey>> = privkeys
@@ -158,10 +167,12 @@ pub fn build_commitment_transaction(
                 .tx_hash(ckb_types::packed::Byte32::from_slice(&xudt_tx_hash)?)
                 .index(usdi_config.index)
                 .build();
-            Some(CellDep::new_builder()
-                .out_point(xudt_out_point)
-                .dep_type(DepType::Code)
-                .build())
+            Some(
+                CellDep::new_builder()
+                    .out_point(xudt_out_point)
+                    .dep_type(DepType::Code)
+                    .build(),
+            )
         } else {
             return Err(anyhow!("xUDT channel detected but usdi config not found"));
         }
@@ -197,12 +208,17 @@ pub fn build_commitment_transaction(
 
     println!("✓ Commitment transaction built");
     println!("  - Transaction hash: {:#x}", tx_hash);
-    println!("  - Payment to merchant: {} CKB (payment) + {} CKB (min capacity) = {} CKB",
+    println!(
+        "  - Payment to merchant: {} CKB (payment) + {} CKB (min capacity) = {} CKB",
         payment_amount / ONE_CKB,
         merchant_min_capacity / ONE_CKB,
-        merchant_total_capacity / ONE_CKB);
+        merchant_total_capacity / ONE_CKB
+    );
     println!("  - Change to user: {} CKB", change_amount / ONE_CKB);
-    println!("  - Transaction fee: {} CKB", actual_fee as f64 / ONE_CKB as f64);
+    println!(
+        "  - Transaction fee: {} CKB",
+        actual_fee as f64 / ONE_CKB as f64
+    );
 
     // Save transaction
     let tx_json = ckb_jsonrpc_types::TransactionView::from(tx.clone());
@@ -251,12 +267,14 @@ fn build_commitment_transaction_internal(
         let change_amount = spillman_lock_capacity
             .checked_sub(merchant_total_capacity)
             .and_then(|v| v.checked_sub(current_fee))
-            .ok_or_else(|| anyhow!(
-                "Insufficient capacity: need {} (merchant) + {} (fee) CKB, have {} CKB",
-                merchant_total_capacity / ONE_CKB,
-                current_fee / ONE_CKB,
-                spillman_lock_capacity / ONE_CKB
-            ))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "Insufficient capacity: need {} (merchant) + {} (fee) CKB, have {} CKB",
+                    merchant_total_capacity / ONE_CKB,
+                    current_fee / ONE_CKB,
+                    spillman_lock_capacity / ONE_CKB
+                )
+            })?;
 
         // Build inputs: Spillman Lock cell
         let input = CellInput::new_builder()
@@ -268,9 +286,12 @@ fn build_commitment_transaction_internal(
         let (user_output, user_output_data, merchant_output, merchant_output_data) =
             if let Some(ref type_script) = xudt_type_script {
                 // xUDT channel: add type script and xUDT amounts
-                let xudt_total = xudt_total_amount.ok_or_else(|| anyhow!("xUDT total amount required"))?;
-                let xudt_payment = xudt_payment_amount.ok_or_else(|| anyhow!("xUDT payment amount required"))?;
-                let xudt_change = xudt_total.checked_sub(xudt_payment)
+                let xudt_total =
+                    xudt_total_amount.ok_or_else(|| anyhow!("xUDT total amount required"))?;
+                let xudt_payment =
+                    xudt_payment_amount.ok_or_else(|| anyhow!("xUDT payment amount required"))?;
+                let xudt_change = xudt_total
+                    .checked_sub(xudt_payment)
                     .ok_or_else(|| anyhow!("xUDT payment exceeds total amount"))?;
 
                 // Output 0: User's address (change with xUDT)
@@ -306,10 +327,14 @@ fn build_commitment_transaction_internal(
             };
 
         // Calculate merchant placeholder size based on multisig config
-        let merchant_placeholder_size = crate::tx_builder::witness_utils::calculate_merchant_signature_size(merchant_multisig_config);
+        let merchant_placeholder_size =
+            crate::tx_builder::witness_utils::calculate_merchant_signature_size(
+                merchant_multisig_config,
+            );
 
         // Calculate total witness size
-        let witness_size = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + merchant_placeholder_size + SIGNATURE_SIZE;
+        let witness_size =
+            EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + merchant_placeholder_size + SIGNATURE_SIZE;
 
         // Build witness with placeholder signatures (will be replaced after signing)
         let mut witness_data = Vec::with_capacity(witness_size);
@@ -349,7 +374,8 @@ fn build_commitment_transaction_internal(
         let tx_view: TransactionView = tx.into();
 
         // Sign the transaction with user's key
-        let signed_tx = sign_commitment_transaction(tx_view, user_privkey, merchant_placeholder_size)?;
+        let signed_tx =
+            sign_commitment_transaction(tx_view, user_privkey, merchant_placeholder_size)?;
 
         // Calculate actual fee for this transaction
         let tx_size = signed_tx.data().as_reader().serialized_size_in_block() as u64;
@@ -390,14 +416,21 @@ fn sign_commitment_transaction(
         .serialize();
 
     // Replace user signature in witness (keep merchant signature as placeholder)
-    let witness = tx.witnesses().get(0)
+    let witness = tx
+        .witnesses()
+        .get(0)
         .ok_or_else(|| anyhow!("Missing witness"))?;
 
     let witness_data = witness.raw_data();
-    let expected_size = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + merchant_placeholder_size + SIGNATURE_SIZE;
+    let expected_size =
+        EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + merchant_placeholder_size + SIGNATURE_SIZE;
 
     if witness_data.len() != expected_size {
-        return Err(anyhow!("Invalid witness size: expected {}, got {}", expected_size, witness_data.len()));
+        return Err(anyhow!(
+            "Invalid witness size: expected {}, got {}",
+            expected_size,
+            witness_data.len()
+        ));
     }
 
     // Build new witness with user signature
@@ -407,7 +440,8 @@ fn sign_commitment_transaction(
     new_witness.extend_from_slice(&user_sig); // Add user signature
 
     // Build new transaction with signed witness
-    let new_tx = tx.as_advanced_builder()
+    let new_tx = tx
+        .as_advanced_builder()
         .set_witnesses(vec![Bytes::from(new_witness).pack()])
         .build();
 

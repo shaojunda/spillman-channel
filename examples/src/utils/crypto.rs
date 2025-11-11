@@ -27,7 +27,7 @@ pub struct SpillmanLockArgs {
     pub merchant_pubkey_hash: [u8; 20],
     pub user_pubkey_hash: [u8; 20],
     pub timeout_timestamp: u64,
-    pub algorithm_id: u8,  // 0 for single-sig, 6 for multi-sig
+    pub algorithm_id: u8, // 0 for single-sig, 6 for multi-sig
     pub version: u8,
 }
 
@@ -41,7 +41,7 @@ impl SpillmanLockArgs {
             merchant_pubkey_hash,
             user_pubkey_hash,
             timeout_timestamp,
-            algorithm_id: 0,  // Single-sig mode
+            algorithm_id: 0, // Single-sig mode
             version: 0,
         }
     }

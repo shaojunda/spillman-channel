@@ -3,9 +3,9 @@ use ckb_sdk::{
     constants::SIGHASH_TYPE_HASH,
     rpc::CkbRpcClient,
     traits::{
-        CellCollector, CellDepResolver, CellQueryOptions, DefaultCellCollector, DefaultCellDepResolver,
-        DefaultHeaderDepResolver, DefaultTransactionDependencyProvider, SecpCkbRawKeySigner,
-        ValueRangeOption,
+        CellCollector, CellDepResolver, CellQueryOptions, DefaultCellCollector,
+        DefaultCellDepResolver, DefaultHeaderDepResolver, DefaultTransactionDependencyProvider,
+        SecpCkbRawKeySigner, ValueRangeOption,
     },
     transaction::builder::FeeCalculator,
     tx_builder::{transfer::CapacityTransferBuilder, unlock_tx, CapacityBalancer, TxBuilder},
@@ -44,7 +44,10 @@ pub async fn build_funding_transaction(
 ) -> Result<(H256, u32)> {
     let capacity_shannon = capacity_ckb * 100_000_000;
 
-    println!("  - Spillman Lock cell capacity: {} CKB ({} shannon)", capacity_ckb, capacity_shannon);
+    println!(
+        "  - Spillman Lock cell capacity: {} CKB ({} shannon)",
+        capacity_ckb, capacity_shannon
+    );
 
     // Setup providers from RPC
     let ckb_client = CkbRpcClient::new(&config.network.rpc_url);
@@ -62,7 +65,11 @@ pub async fn build_funding_transaction(
 
     // Build ScriptUnlocker for signing
     // We need to re-parse the private key from the config
-    let privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
+    let privkey_hex = config
+        .user
+        .private_key
+        .as_ref()
+        .expect("User private_key is required");
     let privkey_hex_trimmed = privkey_hex.trim_start_matches("0x");
     let privkey_bytes = hex::decode(privkey_hex_trimmed)
         .map_err(|e| anyhow!("failed to decode private key hex: {}", e))?;
@@ -102,7 +109,10 @@ pub async fn build_funding_transaction(
     )?;
 
     if !still_locked_groups.is_empty() {
-        return Err(anyhow!("Some script groups are still locked: {:?}", still_locked_groups));
+        return Err(anyhow!(
+            "Some script groups are still locked: {:?}",
+            still_locked_groups
+        ));
     }
 
     let tx_hash = tx.hash();
@@ -146,10 +156,7 @@ pub async fn build_cofund_funding_transaction(
     fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, u32)> {
-    use ckb_types::{
-        core::TransactionBuilder,
-        packed::CellInput,
-    };
+    use ckb_types::{core::TransactionBuilder, packed::CellInput};
 
     println!("  - Co-fund 模式：User + Merchant 共同出资");
 
@@ -171,7 +178,10 @@ pub async fn build_cofund_funding_transaction(
     let user_buffer_shannon = 1 * 100_000_000;
 
     println!("  - User 需出资: {} CKB + 1 CKB buffer", user_capacity_ckb);
-    println!("  - Merchant 需出资: {} CKB (最小占用)", merchant_capacity_shannon / 100_000_000);
+    println!(
+        "  - Merchant 需出资: {} CKB (最小占用)",
+        merchant_capacity_shannon / 100_000_000
+    );
 
     // Setup providers from RPC
     let ckb_client = CkbRpcClient::new(&config.network.rpc_url);
@@ -185,14 +195,22 @@ pub async fn build_cofund_funding_transaction(
     let tx_dep_provider = DefaultTransactionDependencyProvider::new(&config.network.rpc_url, 10);
 
     // Parse private keys
-    let user_privkey_hex = config.user.private_key.as_ref().expect("User private_key is required");
+    let user_privkey_hex = config
+        .user
+        .private_key
+        .as_ref()
+        .expect("User private_key is required");
     let user_privkey_hex_trimmed = user_privkey_hex.trim_start_matches("0x");
     let user_privkey_bytes = hex::decode(user_privkey_hex_trimmed)
         .map_err(|e| anyhow!("failed to decode user private key hex: {}", e))?;
     let user_key = secp256k1::SecretKey::from_slice(&user_privkey_bytes)
         .map_err(|e| anyhow!("invalid user private key: {}", e))?;
 
-    let merchant_privkey_hex = config.merchant.private_key.as_ref().expect("Merchant private_key is required");
+    let merchant_privkey_hex = config
+        .merchant
+        .private_key
+        .as_ref()
+        .expect("Merchant private_key is required");
     let merchant_privkey_hex_trimmed = merchant_privkey_hex.trim_start_matches("0x");
     let merchant_privkey_bytes = hex::decode(merchant_privkey_hex_trimmed)
         .map_err(|e| anyhow!("failed to decode merchant private key hex: {}", e))?;
@@ -212,14 +230,17 @@ pub async fn build_cofund_funding_transaction(
     user_query_with_capacity.min_total_capacity = user_capacity_shannon + user_buffer_shannon;
 
     println!("  - 正在查询 cells（过滤掉 UDT/NFT cells）...");
-    let (user_cells, _total_user_capacity) = cell_collector
-        .collect_live_cells(&user_query_with_capacity, false)?;
+    let (user_cells, _total_user_capacity) =
+        cell_collector.collect_live_cells(&user_query_with_capacity, false)?;
 
     if user_cells.is_empty() {
         return Err(anyhow!("User 没有任何可用的 live cells"));
     }
 
-    let user_input_capacity: u64 = user_cells.iter().map(|c| Unpack::<u64>::unpack(&c.output.capacity())).sum();
+    let user_input_capacity: u64 = user_cells
+        .iter()
+        .map(|c| Unpack::<u64>::unpack(&c.output.capacity()))
+        .sum();
     let user_required_capacity = user_capacity_shannon + user_buffer_shannon;
 
     println!(
@@ -249,8 +270,8 @@ pub async fn build_cofund_funding_transaction(
     merchant_query_with_capacity.min_total_capacity = merchant_capacity_shannon;
 
     println!("  - 正在查询 Merchant cells（过滤掉 UDT/NFT cells）...");
-    let (merchant_cells, _total_merchant_capacity) = cell_collector
-        .collect_live_cells(&merchant_query_with_capacity, false)?;
+    let (merchant_cells, _total_merchant_capacity) =
+        cell_collector.collect_live_cells(&merchant_query_with_capacity, false)?;
 
     if merchant_cells.is_empty() {
         return Err(anyhow!("Merchant 没有任何可用的 live cells"));
@@ -401,13 +422,18 @@ pub async fn build_cofund_funding_transaction(
     let max_iterations = 10;
     let mut current_fee = 0u64;
 
-    println!("  - User 需要贡献: {} CKB (含 buffer)", (user_capacity_shannon + user_buffer_shannon) as f64 / 100_000_000.0);
-    println!("  - Merchant 需要贡献: {} CKB", merchant_capacity_shannon as f64 / 100_000_000.0);
+    println!(
+        "  - User 需要贡献: {} CKB (含 buffer)",
+        (user_capacity_shannon + user_buffer_shannon) as f64 / 100_000_000.0
+    );
+    println!(
+        "  - Merchant 需要贡献: {} CKB",
+        merchant_capacity_shannon as f64 / 100_000_000.0
+    );
 
     // Merchant change is fixed (doesn't depend on fee)
     let merchant_change_opt = {
-        let merchant_available = merchant_input_capacity
-            .checked_sub(merchant_capacity_shannon);
+        let merchant_available = merchant_input_capacity.checked_sub(merchant_capacity_shannon);
 
         match merchant_available {
             Some(change) if change >= min_merchant_change => Some(change),
@@ -456,12 +482,21 @@ pub async fn build_cofund_funding_transaction(
         let actual_fee = calculate_tx_fee(&temp_tx);
 
         if iteration == 0 {
-            println!("  - 初始手续费估算: {} shannon ({} CKB)", actual_fee, actual_fee as f64 / 100_000_000.0);
+            println!(
+                "  - 初始手续费估算: {} shannon ({} CKB)",
+                actual_fee,
+                actual_fee as f64 / 100_000_000.0
+            );
         }
 
         // Check if fee has stabilized
         if actual_fee == current_fee {
-            println!("  - 手续费已稳定: {} shannon ({} CKB) (迭代 {} 次)", actual_fee, actual_fee as f64 / 100_000_000.0, iteration + 1);
+            println!(
+                "  - 手续费已稳定: {} shannon ({} CKB) (迭代 {} 次)",
+                actual_fee,
+                actual_fee as f64 / 100_000_000.0,
+                iteration + 1
+            );
             final_user_change_opt = user_change_opt;
             final_tx = Some(temp_tx);
             break;
@@ -471,7 +506,10 @@ pub async fn build_cofund_funding_transaction(
         current_fee = actual_fee;
 
         if iteration == max_iterations - 1 {
-            println!("  - ⚠️  达到最大迭代次数，使用最后计算的手续费: {} shannon", current_fee);
+            println!(
+                "  - ⚠️  达到最大迭代次数，使用最后计算的手续费: {} shannon",
+                current_fee
+            );
             final_user_change_opt = user_change_opt;
             final_tx = Some(temp_tx);
         }
@@ -482,25 +520,41 @@ pub async fn build_cofund_funding_transaction(
     // Calculate and print final fee
     let final_fee = calculate_tx_fee(&tx);
     println!("\n  📊 最终交易费用统计:");
-    println!("    - 交易大小: {} bytes", tx.data().as_reader().serialized_size_in_block());
+    println!(
+        "    - 交易大小: {} bytes",
+        tx.data().as_reader().serialized_size_in_block()
+    );
     println!("    - 手续费率: {} shannon/KB", fee_rate);
-    println!("    - 最终手续费: {} shannon ({} CKB)", final_fee, final_fee as f64 / 100_000_000.0);
+    println!(
+        "    - 最终手续费: {} shannon ({} CKB)",
+        final_fee,
+        final_fee as f64 / 100_000_000.0
+    );
 
     // Verify against node's minimum fee requirement
     let min_required_fee = 630u64; // CKB node's min fee requirement
     if final_fee < min_required_fee {
-        println!("    - ⚠️  警告: 手续费 ({} shannon) 低于节点最低要求 ({} shannon)", final_fee, min_required_fee);
+        println!(
+            "    - ⚠️  警告: 手续费 ({} shannon) 低于节点最低要求 ({} shannon)",
+            final_fee, min_required_fee
+        );
         println!("    - 💡 建议: 提高 fee_rate 或增加交易复杂度");
     }
 
     println!("\n  💰 找零统计:");
     if let Some(user_change) = final_user_change_opt {
-        println!("    - User 找零: {} CKB", user_change as f64 / 100_000_000.0);
+        println!(
+            "    - User 找零: {} CKB",
+            user_change as f64 / 100_000_000.0
+        );
     } else {
         println!("    - User 无找零（全部用于 Spillman cell 和手续费）");
     }
     if let Some(merchant_change) = merchant_change_opt {
-        println!("    - Merchant 找零: {} CKB", merchant_change as f64 / 100_000_000.0);
+        println!(
+            "    - Merchant 找零: {} CKB",
+            merchant_change as f64 / 100_000_000.0
+        );
     } else {
         println!("    - Merchant 无找零（全部用于 Spillman cell）");
     }
@@ -528,14 +582,8 @@ pub async fn build_cofund_funding_transaction(
     println!("✓ Co-fund 交易已构建并签名");
     println!("  - Transaction hash: {:#x}", tx_hash);
     println!("  - Inputs 数量: {}", signed_tx.inputs().len());
-    println!(
-        "    - User inputs: {} 个",
-        user_cells.len()
-    );
-    println!(
-        "    - Merchant inputs: {} 个",
-        merchant_cells.len()
-    );
+    println!("    - User inputs: {} 个", user_cells.len());
+    println!("    - Merchant inputs: {} 个", merchant_cells.len());
     println!("  - Outputs 数量: {}", signed_tx.outputs().len());
 
     // Verify capacity balance
@@ -545,7 +593,11 @@ pub async fn build_cofund_funding_transaction(
         .map(|o| Unpack::<u64>::unpack(&o.capacity()))
         .sum();
     let fee = total_input_capacity - total_output;
-    println!("  - 手续费: {} shannon ({} CKB)", fee, fee as f64 / 100_000_000.0);
+    println!(
+        "  - 手续费: {} shannon ({} CKB)",
+        fee,
+        fee as f64 / 100_000_000.0
+    );
 
     // Save signed transaction
     let tx_json = ckb_jsonrpc_types::TransactionView::from(signed_tx);
@@ -556,9 +608,11 @@ pub async fn build_cofund_funding_transaction(
     }
     fs::write(output_path, json_str)?;
 
-    println!("✓ 已签名的 Co-fund Funding transaction 已保存: {}", output_path);
+    println!(
+        "✓ 已签名的 Co-fund Funding transaction 已保存: {}",
+        output_path
+    );
 
     // Return tx_hash and output_index (Spillman Lock cell is always at index 0)
     Ok((tx_hash.unpack(), 0))
 }
-

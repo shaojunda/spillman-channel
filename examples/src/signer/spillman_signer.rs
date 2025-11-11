@@ -11,7 +11,10 @@ pub struct SpillmanSigner;
 impl SpillmanSigner {
     /// Calculate SIGHASH_ALL message for a transaction
     /// This follows the CKB transaction signing standard
-    pub fn calculate_sighash_all(tx: &packed::Transaction, witness_index: usize) -> Result<[u8; 32]> {
+    pub fn calculate_sighash_all(
+        tx: &packed::Transaction,
+        witness_index: usize,
+    ) -> Result<[u8; 32]> {
         // Serialize transaction for signing
         let mut hasher = new_blake2b();
 
@@ -29,9 +32,9 @@ impl SpillmanSigner {
             ));
         }
 
-        let witness = witnesses.get(witness_index).ok_or_else(|| {
-            anyhow!("Failed to get witness at index {}", witness_index)
-        })?;
+        let witness = witnesses
+            .get(witness_index)
+            .ok_or_else(|| anyhow!("Failed to get witness at index {}", witness_index))?;
 
         hasher.update(witness.as_slice());
 
