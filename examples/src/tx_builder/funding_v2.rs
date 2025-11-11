@@ -416,6 +416,7 @@ impl FundingTxBuilder {
         &self,
         mut base_tx: TransactionView,
         cell_collector: &mut dyn CellCollector,
+        cell_dep_resolver: &dyn CellDepResolver,
     ) -> Result<TransactionView> {
         // Only process if this is an xUDT transaction
         let xudt_amount = match self.request.xudt_amount {
@@ -430,7 +431,10 @@ impl FundingTxBuilder {
         let mut query = CellQueryOptions::new_lock(self.context.funding_source_lock_script.clone());
         query.secondary_script = Some(type_script.clone());
         query.data_len_range = Some(ValueRangeOption::new_min(16));
-        let (cells, _) = cell_collector.collect_live_cells(&query, false)?;
+        // Set min_total_capacity to a large value to collect all matching cells
+        // Default is 1 shannon which stops after collecting just one cell
+        query.min_total_capacity = u64::MAX;
+        let (cells, _) = cell_collector.collect_live_cells_async(&query, false).await?;
 
         println!("  - Found {} cells with matching lock script", cells.len());
 
@@ -538,11 +542,31 @@ impl FundingTxBuilder {
             outputs_data.push(change_data.pack());
         }
 
-        // Rebuild transaction with witnesses
+        // Collect cell deps from existing transaction
+        let mut cell_deps: Vec<_> = base_tx.cell_deps().into_iter().collect();
+
+        // Resolve and add cell deps for newly added xUDT inputs
+        if !xudt_inputs.is_empty() {
+            // Get lock script from the first xUDT input (they should all have the same lock script)
+            let lock_script = &xudt_inputs[0].output.lock();
+
+            // Resolve cell dep for the lock script (e.g., secp256k1)
+            if let Some(cell_dep) = cell_dep_resolver.resolve(lock_script) {
+                // Check if this cell dep is already in the list (compare by out_point)
+                let new_out_point = cell_dep.out_point();
+                let already_exists = cell_deps.iter().any(|d| d.out_point() == new_out_point);
+                if !already_exists {
+                    cell_deps.push(cell_dep);
+                }
+            }
+        }
+
+        // Rebuild transaction with witnesses and cell deps
         let tx = base_tx.as_advanced_builder()
             .set_inputs(inputs)
             .set_outputs(outputs)
             .set_outputs_data(outputs_data)
+            .set_cell_deps(cell_deps)
             .set_witnesses(witnesses)
             .build();
 
@@ -613,7 +637,7 @@ impl FundingTxBuilder {
             ).await?;
 
             // Balance xUDT cells first (if this is an xUDT transaction)
-            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector).await?;
+            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver).await?;
 
             // Balance the transaction (add inputs for this party)
             balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?
@@ -627,7 +651,7 @@ impl FundingTxBuilder {
             ).await?;
 
             // Balance xUDT cells first (if this is an xUDT transaction)
-            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector).await?;
+            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver).await?;
 
             // Balance the transaction (add inputs for this party)
             let balanced_tx = balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?;
@@ -669,7 +693,7 @@ impl FundingTxBuilder {
             ).await?;
 
             // Balance xUDT cells first (if this is an xUDT transaction)
-            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector).await?;
+            let xudt_balanced_tx = self.balance_xudt_cells(base_tx, &mut cell_collector, &cell_dep_resolver).await?;
 
             // Balance capacity
             let balanced_tx = balancer.balance_tx_capacity(&xudt_balanced_tx, &mut cell_collector, &tx_dep_provider, &cell_dep_resolver, &header_dep_resolver)?;
