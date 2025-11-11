@@ -1,0 +1,38 @@
+# Spillman Channel Configuration Example
+# Copy this file to config.toml and fill in your actual keys
+
+[network]
+# CKB RPC URL
+rpc_url = "https://testnet.ckb.dev"
+
+[user]
+# User's private key (without 0x prefix)
+private_key = "your_user_private_key_here"
+# User's CKB address
+address = "ckt1..."
+
+[merchant]
+# Merchant's private key (without 0x prefix)
+private_key = "your_merchant_private_key_here"
+# Merchant's CKB address
+address = "ckt1..."
+
+[channel]
+# Channel capacity in CKB (e.g., 1000 CKB)
+capacity_ckb = 1000
+# Timeout in epochs (e.g., 144 epochs ≈ 24 days, 1 epoch ≈ 4 hours)
+timeout_epochs = 144
+
+[spillman_lock]
+# Spillman Lock script code hash (type_id from deployment)
+code_hash = "0x41fa54ee27a517db245b014116fe2baff1dcb639d42fc14be43c315ea3cef9f2"
+# Hash type
+hash_type = "type"
+# Cell dep (for transaction)
+tx_hash = "0x3f0fe5376b847b0c286184bb59d38765841e135d7d64f87b2bf7014c6316eee2"
+index = 1
+
+[auth]
+# Auth cell dep (for transaction signing)
+tx_hash = "0x3f0fe5376b847b0c286184bb59d38765841e135d7d64f87b2bf7014c6316eee2"
+index = 0

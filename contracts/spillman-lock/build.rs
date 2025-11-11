@@ -64,4 +64,24 @@ fn main() {
     }
 
     writeln!(&mut out_file, "];").expect("write closing bracket");
+
+    // Generate SECP256K1_MULTISIG_V2_CODE_HASH
+    let secp256k1_multisig_v2_code_hash = hex::decode(
+        "36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29"
+    ).expect("decode secp256k1 multisig v2 code hash");
+
+    write!(
+        &mut out_file,
+        "\npub const SECP256K1_MULTISIG_V2_CODE_HASH: [u8; 32] = ["
+    )
+    .expect("write to secp256k1_code_hash.rs");
+
+    for (i, byte) in secp256k1_multisig_v2_code_hash.iter().enumerate() {
+        if i > 0 {
+            write!(&mut out_file, ", ").expect("write comma");
+        }
+        write!(&mut out_file, "{:#02X}", byte).expect("write byte");
+    }
+
+    writeln!(&mut out_file, "];").expect("write closing bracket");
 }

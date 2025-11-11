@@ -21,14 +21,15 @@ use ckb_std::{
     ckb_constants::Source,
     ckb_types::{
         bytes::Bytes,
-        core::{ScriptHashType},
-        packed::{Script, Transaction},
+        core::ScriptHashType,
+        packed::{CellDepVec, Script},
         prelude::*,
     },
     error::SysError,
     high_level::{
-        load_cell, load_cell_capacity, load_cell_data, load_cell_occupied_capacity,
-        load_input_since, load_script, load_transaction, load_witness, spawn_cell, QueryIter,
+        load_cell, load_cell_capacity, load_cell_data, load_cell_lock, load_cell_occupied_capacity,
+        load_cell_type, load_input_since, load_script, load_transaction, load_witness, spawn_cell,
+        QueryIter,
     },
     since::Since,
     syscalls::wait,
@@ -88,8 +89,12 @@ pub fn program_entry() -> i8 {
 const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
 
 // Auth algorithm IDs
-const AUTH_ALGORITHM_CKB: u8 = 0;          // CKB/SECP256K1 single-sig
-const AUTH_ALGORITHM_CKB_MULTISIG: u8 = 6; // CKB multisig
+const AUTH_ALGORITHM_CKB: u8 = 0; // CKB/SECP256K1 single-sig
+const AUTH_ALGORITHM_CKB_MULTISIG_LEGACY: u8 = 6; // CKB multisig Legacy (hash_type = Type)
+const AUTH_ALGORITHM_CKB_MULTISIG_V2: u8 = 7; // CKB multisig V2 (hash_type = Data1)
+
+// Note: When calling ckb_auth, both LEGACY and V2 should use algorithm_id = 6
+const AUTH_ALGORITHM_FOR_CKB_AUTH: u8 = 6;
 
 // Script args layout (fixed 50 bytes):
 // [merchant_lock_arg(20)] + [user_pubkey_hash(20)] + [timeout(8)] + [algorithm_id(1)] + [version(1)]
@@ -97,25 +102,29 @@ const AUTH_ALGORITHM_CKB_MULTISIG: u8 = 6; // CKB multisig
 // Fields:
 //   merchant_lock_arg: 20 bytes
 //     - Single-sig (algorithm_id=0): blake160(pubkey)
-//     - Multi-sig (algorithm_id=6): blake160(multisig_config)
+//     - Multi-sig Legacy (algorithm_id=6): blake160(multisig_config)
+//     - Multi-sig V2 (algorithm_id=7): blake160(multisig_config)
 //       multisig_config format: S | R | M | N | PubKeyHash1 | PubKeyHash2 | ...
-//         S = format_version (1 byte, set to 0)
+//         S = format_version (1 byte: 0=Legacy, 1=V2)
 //         R = first_n (1 byte, at least R signatures must match first R pubkeys)
 //         M = threshold (1 byte, require M signatures)
 //         N = pubkey_cnt (1 byte, total N pubkeys)
 //         PubKeyHashX = blake160(pubkey) (20 bytes each)
 //   user_pubkey_hash: 20 bytes - blake160(user_pubkey)
-//   timeout: 8 bytes - epoch number (little-endian u64)
-//   algorithm_id: 1 byte - 0 for single-sig, 6 for multi-sig
+//   timeout: 8 bytes - timestamp since value (little-endian u64)
+//   algorithm_id: 1 byte
+//     - 0: single-sig (CKB default)
+//     - 6: multi-sig legacy (hash_type = Type)
+//     - 7: multi-sig V2 (hash_type = Data1)
 //   version: 1 byte - set to 0
 const MERCHANT_LOCK_ARG_LEN: usize = 20;
 const USER_PUBKEY_HASH_LEN: usize = 20;
-const TIMEOUT_EPOCH_LEN: usize = 8;
+const TIMEOUT_LEN: usize = 8;
 const ALGORITHM_ID_LEN: usize = 1;
 const VERSION_LEN: usize = 1;
 const MULTISIG_HEADER_LEN: usize = 4; // S + R + M + N
 const ARGS_LEN: usize =
-    MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + ALGORITHM_ID_LEN + VERSION_LEN; // 50 bytes
+    MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN + ALGORITHM_ID_LEN + VERSION_LEN; // 50 bytes
 
 // Script args field offsets (removed - use direct indexing)
 
@@ -159,11 +168,12 @@ fn verify() -> Result<(), Error> {
         return Err(Error::EmptyWitnessArgsError);
     }
 
-    // Load transaction once and reuse it
-    let tx = load_transaction()?;
-
     let message = {
-        let raw_tx = tx.raw().as_builder().cell_deps(Default::default()).build();
+        let raw_tx = load_transaction()?
+            .raw()
+            .as_builder()
+            .cell_deps(CellDepVec::default())
+            .build();
         blake2b_256(raw_tx.as_slice())
     };
 
@@ -177,16 +187,17 @@ fn verify() -> Result<(), Error> {
 
     // Parse args fields
     let merchant_lock_arg = &args[0..MERCHANT_LOCK_ARG_LEN];
-    let user_pubkey_hash = &args[MERCHANT_LOCK_ARG_LEN..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN];
-    let timeout_epoch = u64::from_le_bytes(
+    let user_pubkey_hash =
+        &args[MERCHANT_LOCK_ARG_LEN..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN];
+    let timeout = u64::from_le_bytes(
         args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN
-            ..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN]
+            ..MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN]
             .try_into()
-            .unwrap(),
+            .map_err(|_| Error::LengthNotEnough)?,
     );
-    let algorithm_id = args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN];
+    let algorithm_id = args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN];
     let version =
-        args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_EPOCH_LEN + ALGORITHM_ID_LEN];
+        args[MERCHANT_LOCK_ARG_LEN + USER_PUBKEY_HASH_LEN + TIMEOUT_LEN + ALGORITHM_ID_LEN];
 
     if version != 0 {
         return Err(Error::UnsupportedVersion);
@@ -197,7 +208,7 @@ fn verify() -> Result<(), Error> {
     // Determine merchant signature type based on algorithm_id
     // After removing empty_witness_args(16) and unlock_type(1), remaining witness is:
     // - Single-sig (algorithm_id=0): merchant_sig(65) + user_sig(65) = 130 bytes
-    // - Multi-sig (algorithm_id=6): multisig_config(4+N*20) + merchant_sigs(M*65) + user_sig(65)
+    // - Multi-sig (algorithm_id=6 or 7): multisig_config(4+N*20) + merchant_sigs(M*65) + user_sig(65)
     let (merchant_algorithm_id, merchant_lock_arg_for_auth) = match algorithm_id {
         AUTH_ALGORITHM_CKB => {
             // Single-sig: witness should be exactly 130 bytes (merchant_sig + user_sig)
@@ -206,13 +217,14 @@ fn verify() -> Result<(), Error> {
             }
             (AUTH_ALGORITHM_CKB, merchant_lock_arg.to_vec())
         }
-        AUTH_ALGORITHM_CKB_MULTISIG => {
+        AUTH_ALGORITHM_CKB_MULTISIG_LEGACY | AUTH_ALGORITHM_CKB_MULTISIG_V2 => {
             // Multi-sig: extract and verify multisig_config from witness
             if witness.len() < MULTISIG_HEADER_LEN + SIGNATURE_LEN {
                 return Err(Error::WitnessLenError);
             }
 
             // Verify multisig_config format version
+            // Both Legacy and V2 use format_version=0 to support both
             if witness[0] != 0 {
                 return Err(Error::InvalidMultisigConfig);
             }
@@ -237,7 +249,8 @@ fn verify() -> Result<(), Error> {
             // Remove multisig_config from witness, leaving only signatures
             witness.drain(0..multisig_config_len);
 
-            (AUTH_ALGORITHM_CKB_MULTISIG, multisig_config)
+            // Use the same algorithm_id for auth verification
+            (algorithm_id, multisig_config)
         }
         _ => return Err(Error::InvalidLockArgs),
     };
@@ -249,16 +262,14 @@ fn verify() -> Result<(), Error> {
             user_pubkey_hash,
             message,
             witness,
-            &tx,
         )?,
         UNLOCK_TYPE_TIMEOUT => verify_timeout_path(
             merchant_algorithm_id,
             &merchant_lock_arg_for_auth,
             user_pubkey_hash,
-            timeout_epoch,
+            timeout,
             message,
             witness,
-            &tx,
         )?,
         _ => return Err(Error::InvalidUnlockType),
     }
@@ -271,7 +282,6 @@ fn verify_commitment_path(
     user_pubkey_hash: &[u8],
     message: [u8; 32],
     witness: Vec<u8>,
-    tx: &Transaction,
 ) -> Result<(), Error> {
     // Split witness into merchant part and user signature
     // - Single-sig: merchant_sig(65) + user_sig(65)
@@ -280,13 +290,23 @@ fn verify_commitment_path(
     let (merchant_signature, user_signature) = witness.split_at(merchant_sig_len);
 
     // Verify commitment output structure
-    verify_commitment_output_structure(merchant_lock_arg, user_pubkey_hash, tx)?;
+    verify_commitment_output_structure(merchant_lock_arg, user_pubkey_hash, merchant_algorithm_id)?;
 
     // Verify user signature (always single-sig)
-    verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
+    verify_signature_with_auth(
+        AUTH_ALGORITHM_CKB,
+        user_pubkey_hash,
+        &message,
+        user_signature,
+    )?;
 
     // Verify merchant signature
-    verify_merchant_signature(merchant_algorithm_id, merchant_lock_arg, merchant_signature, &message)?;
+    verify_merchant_signature(
+        merchant_algorithm_id,
+        merchant_lock_arg,
+        merchant_signature,
+        &message,
+    )?;
 
     Ok(())
 }
@@ -295,10 +315,9 @@ fn verify_timeout_path(
     merchant_algorithm_id: u8,
     merchant_lock_arg: &[u8],
     user_pubkey_hash: &[u8],
-    timeout_epoch: u64,
+    timeout: u64,
     message: [u8; 32],
     witness: Vec<u8>,
-    tx: &Transaction,
 ) -> Result<(), Error> {
     // Split witness into merchant part and user signature
     // - Single-sig: merchant_sig(65) + user_sig(65)
@@ -308,22 +327,33 @@ fn verify_timeout_path(
 
     let raw_since = load_input_since(0, Source::GroupInput)?;
     let since = Since::new(raw_since);
-    let timeout = Since::new(timeout_epoch);
+    let timeout_since = Since::new(timeout);
 
-    if since < timeout {
-        return Err(Error::TimeoutNotReached);
+    // Security: Only proceed with verification if since >= timeout
+    if since >= timeout_since {
+         // Verify refund output structure
+         verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, merchant_algorithm_id)?;
+
+        // Verify user signature (always single-sig)
+        verify_signature_with_auth(
+            AUTH_ALGORITHM_CKB,
+            user_pubkey_hash,
+            &message,
+            user_signature,
+        )?;
+
+        // Verify merchant signature
+        verify_merchant_signature(
+            merchant_algorithm_id,
+            merchant_lock_arg,
+            merchant_signature,
+            &message,
+        )?;
+
+        Ok(())
+    } else {
+        Err(Error::TimeoutNotReached)
     }
-
-    // Verify user signature (always single-sig)
-    verify_signature_with_auth(AUTH_ALGORITHM_CKB, user_pubkey_hash, &message, user_signature)?;
-
-    // Verify merchant signature
-    verify_merchant_signature(merchant_algorithm_id, merchant_lock_arg, merchant_signature, &message)?;
-
-    // Verify refund output structure
-    verify_refund_output_structure(merchant_lock_arg, user_pubkey_hash, tx)?;
-
-    Ok(())
 }
 
 fn verify_merchant_signature(
@@ -332,10 +362,12 @@ fn verify_merchant_signature(
     merchant_signature: &[u8],
     message: &[u8; 32],
 ) -> Result<(), Error> {
-    // For multisig (algorithm_id=6), auth expects:
+    // For multisig (algorithm_id=6 or 7), auth expects:
     //   - lock_arg: blake160(multisig_config) - 20 bytes
     //   - signature: multisig_config + M*65 signatures
-    if merchant_algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG {
+    if merchant_algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_LEGACY
+        || merchant_algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2
+    {
         // merchant_lock_arg contains the full multisig_config
         // merchant_signature contains M*65 bytes of signatures
         // Combine them for signature parameter: multisig_config + signatures
@@ -344,10 +376,20 @@ fn verify_merchant_signature(
 
         // Calculate blake160 hash for lock_arg parameter
         let multisig_hash = &blake2b_256(merchant_lock_arg)[0..20];
-        verify_signature_with_auth(merchant_algorithm_id, multisig_hash, message, &multisig_witness)
+        verify_signature_with_auth(
+            merchant_algorithm_id,
+            multisig_hash,
+            message,
+            &multisig_witness,
+        )
     } else {
         // Single-sig: signature is just 65 bytes
-        verify_signature_with_auth(merchant_algorithm_id, merchant_lock_arg, message, merchant_signature)
+        verify_signature_with_auth(
+            merchant_algorithm_id,
+            merchant_lock_arg,
+            message,
+            merchant_signature,
+        )
     }
 }
 
@@ -357,7 +399,15 @@ fn verify_signature_with_auth(
     message: &[u8; 32],
     signature: &[u8],
 ) -> Result<(), Error> {
-    let algorithm_id_str = CString::new(encode([algorithm_id])).unwrap();
+    // Map algorithm_id for ckb_auth:
+    // - Both Legacy (6) and V2 (7) multisig use algorithm_id = 6 in ckb_auth
+    let auth_algorithm_id = if algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2 {
+        AUTH_ALGORITHM_FOR_CKB_AUTH
+    } else {
+        algorithm_id
+    };
+
+    let algorithm_id_str = CString::new(encode([auth_algorithm_id])).unwrap();
     let signature_str = CString::new(encode(signature)).unwrap();
     let message_str = CString::new(encode(message)).unwrap();
     let lock_arg_str = CString::new(encode(lock_arg)).unwrap();
@@ -385,79 +435,97 @@ fn verify_signature_with_auth(
 fn verify_commitment_output_structure(
     merchant_lock_data: &[u8],
     user_pubkey_hash: &[u8],
-    tx: &Transaction,
+    algorithm_id: u8,
 ) -> Result<(), Error> {
-    let outputs = tx.raw().outputs();
-
-    if outputs.len() != 2 {
+    // Verify that there are exactly two outputs
+    if load_cell(2, Source::Output).is_ok() {
         return Err(Error::CommitmentMustHaveExactlyTwoOutputs);
     }
 
-    let user_output = outputs.get(0).unwrap();
+    // Verify that there is a merchant output
+    if load_cell(1, Source::Output).is_err() {
+        return Err(Error::CommitmentMustHaveExactlyTwoOutputs);
+    }
+
+    let user_lock = load_cell_lock(0, Source::Output)?;
+
     let expected_user_lock = Script::new_builder()
         .code_hash(SECP256K1_CODE_HASH.pack())
-        .hash_type(ScriptHashType::Type.into())
+        .hash_type(ScriptHashType::Type)
         .args(user_pubkey_hash.pack())
         .build();
 
-    if user_output.lock().code_hash() != expected_user_lock.code_hash()
-    || user_output.lock().hash_type() != expected_user_lock.hash_type()
-    || user_output.lock().args() != expected_user_lock.args()
-    {
+    if user_lock != expected_user_lock {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
-    let merchant_output = outputs.get(1).unwrap();
-
-    // Build expected merchant lock based on whether it's single-sig or multi-sig
+    // Build expected merchant lock based on algorithm_id
     // Note: merchant_lock_data parameter contains:
-    //   - Single-sig: 20 bytes blake160(pubkey) from args
-    //   - Multi-sig: 4+N*20 bytes full multisig_config from witness
+    //   - Single-sig (algorithm_id=0): 20 bytes blake160(pubkey) from args
+    //   - Multi-sig (algorithm_id=6 or 7): 4+N*20 bytes full multisig_config from witness
     let expected_merchant_lock = if merchant_lock_data.len() == MERCHANT_LOCK_ARG_LEN {
         // Single-sig output: code_hash=SECP256K1, args=blake160(pubkey) (20 bytes)
         Script::new_builder()
             .code_hash(SECP256K1_CODE_HASH.pack())
-            .hash_type(ScriptHashType::Type.into())
+            .hash_type(ScriptHashType::Type)
             .args(merchant_lock_data.pack())
             .build()
     } else {
         // Multi-sig output: code_hash=SECP256K1_MULTISIG, args=blake160(multisig_config) (20 bytes)
         // Need to hash the full multisig_config to get the 20-byte args
         let multisig_hash = &blake2b_256(merchant_lock_data)[0..20];
+
+        // Determine code_hash and hash_type based on algorithm_id:
+        // - algorithm_id = 6: Legacy multisig (code_hash = SECP256K1_MULTISIG_CODE_HASH, hash_type = Type)
+        // - algorithm_id = 7: V2 multisig (code_hash = SECP256K1_MULTISIG_V2_CODE_HASH, hash_type = Data1)
+        let (code_hash, hash_type) = if algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2 {
+            (SECP256K1_MULTISIG_V2_CODE_HASH, ScriptHashType::Data1)
+        } else {
+            (SECP256K1_MULTISIG_CODE_HASH, ScriptHashType::Type)
+        };
+
         Script::new_builder()
-            .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
-            .hash_type(ScriptHashType::Type.into())
+            .code_hash(code_hash.pack())
+            .hash_type(hash_type)
             .args(multisig_hash.pack())
             .build()
     };
 
-    if merchant_output.lock().code_hash() != expected_merchant_lock.code_hash()
-    || merchant_output.lock().hash_type() != expected_merchant_lock.hash_type()
-    || merchant_output.lock().args() != expected_merchant_lock.args()
-    {
+    let merchant_lock = load_cell_lock(1, Source::Output)?;
+
+    if merchant_lock != expected_merchant_lock {
         return Err(Error::MerchantPubkeyHashMismatch);
     }
 
     // Verify type script consistency for xUDT channels
-    let input = load_cell(0, Source::GroupInput)?;
-    let input_type = input.type_().to_opt();
-    let user_output_type = user_output.type_().to_opt();
-    let merchant_output_type = merchant_output.type_().to_opt();
+    let type_script = load_cell_type(0, Source::GroupInput)?;
+    let user_output_type = load_cell_type(0, Source::Output)?;
+    let merchant_output_type = load_cell_type(1, Source::Output)?;
 
     // If input has type script, both outputs must have the same type script
-    if let Some(input_t) = input_type {
-        let input_type_hash = input_t.calc_script_hash();
-
+    if let Some(input_t) = type_script {
         // Verify user output type script
-        match user_output_type {
-            Some(user_t) if user_t.calc_script_hash() == input_type_hash => {}
-            _ => return Err(Error::TypeScriptMismatch),
+        if let Some(user_t) = user_output_type {
+            if user_t != input_t {
+                return Err(Error::TypeScriptMismatch);
+            }
         }
 
-        // Verify merchant output type script
-        match merchant_output_type {
-            Some(merchant_t) if merchant_t.calc_script_hash() == input_type_hash => {}
-            _ => return Err(Error::TypeScriptMismatch),
+        // Verify merchant output type script and xUDT amount
+        if let Some(merchant_t) = merchant_output_type {
+            // Verify type script matches input
+            if merchant_t != input_t {
+                return Err(Error::TypeScriptMismatch);
+            }
+            // Merchant has type script: verify xUDT amount > 0 (merchant receives payment)
+            let merchant_output_data = load_cell_data(1, Source::Output)?;
+            // xUDT amount is stored in first 16 bytes (u128 little-endian)
+            if merchant_output_data.len() < 16 {
+                return Err(Error::XudtAmountMismatch);
+            }
+            if merchant_output_data[0..16] == [0u8; 16] {
+                return Err(Error::XudtAmountMismatch);
+            }
         }
     } else {
         // If input has no type script, outputs should not have type script either
@@ -472,63 +540,62 @@ fn verify_commitment_output_structure(
 fn verify_refund_output_structure(
     merchant_lock_data: &[u8],
     user_pubkey_hash: &[u8],
-    tx: &Transaction,
+    algorithm_id: u8,
 ) -> Result<(), Error> {
-    let outputs = tx.raw().outputs();
-    let outputs_data = tx.raw().outputs_data();
-
     // Refund can have 1 or 2 outputs
     // 1 output: user funded alone
     // 2 outputs: user + merchant co-funded (merchant gets capacity back)
-    if outputs.len() > 2 {
+    if load_cell(2, Source::Output).is_ok() {
         return Err(Error::RefundMustHaveOneOrTwoOutputs);
     }
 
     // 1. Verify Output 0 is user address
-    let user_output = outputs.get(0).unwrap();
+    let user_lock = load_cell_lock(0, Source::Output)?;
     let expected_user_lock = Script::new_builder()
         .code_hash(SECP256K1_CODE_HASH.pack())
-        .hash_type(ScriptHashType::Type.into())
+        .hash_type(ScriptHashType::Type)
         .args(user_pubkey_hash.pack())
         .build();
 
-    if user_output.lock().code_hash() != expected_user_lock.code_hash()
-    || user_output.lock().hash_type() != expected_user_lock.hash_type()
-    || user_output.lock().args() != expected_user_lock.args()
-    {
+    if user_lock != expected_user_lock {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
     // 2. If there's Output 1, verify it's merchant address and capacity is exact
-    if outputs.len() == 2 {
-        let merchant_output = outputs.get(1).unwrap();
-
-        // Build expected merchant lock based on whether it's single-sig or multi-sig
+    if let Ok(merchant_output) = load_cell(1, Source::Output) {
+        // Build expected merchant lock based on algorithm_id
         // Note: merchant_lock_data parameter contains:
-        //   - Single-sig: 20 bytes blake160(pubkey) from args
-        //   - Multi-sig: 4+N*20 bytes full multisig_config from witness
+        //   - Single-sig (algorithm_id=0): 20 bytes blake160(pubkey) from args
+        //   - Multi-sig (algorithm_id=6 or 7): 4+N*20 bytes full multisig_config from witness
         let expected_merchant_lock = if merchant_lock_data.len() == MERCHANT_LOCK_ARG_LEN {
             // Single-sig output: code_hash=SECP256K1, args=blake160(pubkey) (20 bytes)
             Script::new_builder()
                 .code_hash(SECP256K1_CODE_HASH.pack())
-                .hash_type(ScriptHashType::Type.into())
+                .hash_type(ScriptHashType::Type)
                 .args(merchant_lock_data.pack())
                 .build()
         } else {
             // Multi-sig output: code_hash=SECP256K1_MULTISIG, args=blake160(multisig_config) (20 bytes)
             // Need to hash the full multisig_config to get the 20-byte args
             let multisig_hash = &blake2b_256(merchant_lock_data)[0..20];
+
+            // Determine code_hash and hash_type based on algorithm_id:
+            // - algorithm_id = 6: Legacy multisig (code_hash = SECP256K1_MULTISIG_CODE_HASH, hash_type = Type)
+            // - algorithm_id = 7: V2 multisig (code_hash = SECP256K1_MULTISIG_V2_CODE_HASH, hash_type = Data1)
+            let (code_hash, hash_type) = if algorithm_id == AUTH_ALGORITHM_CKB_MULTISIG_V2 {
+                (SECP256K1_MULTISIG_V2_CODE_HASH, ScriptHashType::Data1)
+            } else {
+                (SECP256K1_MULTISIG_CODE_HASH, ScriptHashType::Type)
+            };
+
             Script::new_builder()
-                .code_hash(SECP256K1_MULTISIG_CODE_HASH.pack())
-                .hash_type(ScriptHashType::Type.into())
+                .code_hash(code_hash.pack())
+                .hash_type(hash_type)
                 .args(multisig_hash.pack())
                 .build()
         };
 
-        if merchant_output.lock().code_hash() != expected_merchant_lock.code_hash()
-        || merchant_output.lock().hash_type() != expected_merchant_lock.hash_type()
-        || merchant_output.lock().args() != expected_merchant_lock.args()
-        {
+        if merchant_output.lock() != expected_merchant_lock {
             return Err(Error::MerchantPubkeyHashMismatch);
         }
 
@@ -543,57 +610,56 @@ fn verify_refund_output_structure(
     }
 
     // 3. Load input cell to get type script
-    let input = load_cell(0, Source::GroupInput)?;
-    let input_type = input.type_().to_opt();
+    let input_type = load_cell_type(0, Source::GroupInput)?;
 
     // 4. Verify type script consistency and xUDT amounts
     if let Some(input_t) = input_type {
-        let input_type_hash = input_t.calc_script_hash();
-
         // Verify user output (Output 0) has same type script and all xUDT
-        let user_output_type = user_output.type_().to_opt();
-        match user_output_type {
-            Some(user_t) if user_t.calc_script_hash() == input_type_hash => {
-                // Verify user gets all xUDT (full refund)
-                let input_data = load_cell_data(0, Source::GroupInput)?;
-                let user_output_data = outputs_data.get(0).unwrap();
-                if input_data != user_output_data.raw_data() {
-                    return Err(Error::XudtAmountMismatch);
-                }
+        // Use load_cell_type API for reliable checking
+        let user_output_type = load_cell_type(0, Source::Output)?;
+        if let Some(user_t) = user_output_type {
+            if user_t != input_t {
+                return Err(Error::TypeScriptMismatch);
             }
-            _ => return Err(Error::TypeScriptMismatch),
+        }
+
+        // Verify user gets all xUDT (full refund)
+        let input_data = load_cell_data(0, Source::GroupInput)?;
+        let user_output_data = load_cell_data(0, Source::Output)?;
+        if input_data != user_output_data {
+            return Err(Error::XudtAmountMismatch);
         }
 
         // If there's merchant output (Output 1), verify type script and xUDT amount = 0
-        if outputs.len() == 2 {
-            let merchant_output = outputs.get(1).unwrap();
-            let merchant_output_type = merchant_output.type_().to_opt();
-
-            match merchant_output_type {
-                Some(merchant_t) if merchant_t.calc_script_hash() == input_type_hash => {
-                    // Verify merchant xUDT amount is 0 (only gets CKB capacity back)
-                    let merchant_output_data = outputs_data.get(1).unwrap();
-
-                    // xUDT amount is stored in first 16 bytes (u128 little-endian)
-                    // Check if it's all zeros
-                    if merchant_output_data.len() < 16
-                        || merchant_output_data.raw_data()[0..16] != [0u8; 16]
-                    {
-                        return Err(Error::XudtAmountMismatch);
-                    }
+        if let Ok(_merchant_output) = load_cell(1, Source::Output) {
+            let merchant_output_type = load_cell_type(1, Source::Output)?;
+            if let Some(merchant_t) = merchant_output_type {
+                if merchant_t != input_t {
+                    return Err(Error::TypeScriptMismatch);
                 }
-                _ => return Err(Error::TypeScriptMismatch),
+                // Verify merchant xUDT amount is 0 (only gets CKB capacity back)
+                let merchant_output_data = load_cell_data(1, Source::Output)?;
+                // xUDT amount is stored in first 16 bytes (u128 little-endian)
+                if merchant_output_data.len() < 16 {
+                    return Err(Error::XudtAmountMismatch);
+                }
+                // Check if amount is zero
+                if merchant_output_data[0..16] != [0u8; 16] {
+                    return Err(Error::XudtAmountMismatch);
+                }
             }
         }
     } else {
         // Pure CKB channel: no outputs should have type script
-        if user_output.type_().to_opt().is_some() {
+        // Use load_cell_type API for reliable checking
+        let user_output_type = load_cell_type(0, Source::Output)?;
+        if user_output_type.is_some() {
             return Err(Error::TypeScriptMismatch);
         }
 
-        if outputs.len() == 2 {
-            let merchant_output = outputs.get(1).unwrap();
-            if merchant_output.type_().to_opt().is_some() {
+        if let Ok(_merchant_output) = load_cell(1, Source::Output) {
+            let merchant_output_type = load_cell_type(1, Source::Output)?;
+            if merchant_output_type.is_some() {
                 return Err(Error::TypeScriptMismatch);
             }
         }

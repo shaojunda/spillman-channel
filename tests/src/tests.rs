@@ -51,19 +51,21 @@ fn test_spillman_lock_commitment_path() {
     // struct SpillmanLockArgs {
     //     merchant_pubkey_hash: [u8; 20],  // 0..20
     //     user_pubkey_hash: [u8; 20],      // 20..40
-    //     timeout_epoch: [u8; 8],          // 40..48 (u64 little-endian)
+    //     timeout: [u8; 8],                // 40..48 (u64 little-endian, timestamp since)
     //     version: u8,                     // 48
     // }
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false); // 7 days
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
     let args = [
         merchant_pubkey_hash.as_ref(),         // 0..20: merchant lock arg (blake160(pubkey))
         user_pubkey_hash.as_ref(),             // 20..40: user pubkey hash
-        &timeout_epoch.as_u64().to_le_bytes(), // 40..48: timeout epoch (little-endian)
+        &timeout_since.as_u64().to_le_bytes(), // 40..48: timeout timestamp (little-endian)
         &[algorithm_id],                       // 48: algorithm_id (0=single-sig)
         &[version],                            // 49: version
     ]
@@ -190,17 +192,19 @@ fn test_spillman_lock_timeout_path() {
     let user_key = generator.gen_keypair();
     let merchant_key = generator.gen_keypair();
 
-    // Build SpillmanLockArgs with timeout epoch
+    // Build SpillmanLockArgs with timeout timestamp
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
     let args = [
         merchant_pubkey_hash.as_ref(),
         user_pubkey_hash.as_ref(),
-        &timeout_epoch.as_u64().to_le_bytes(),
+        &timeout_since.as_u64().to_le_bytes(),
         &[algorithm_id],
         &[version],
     ]
@@ -235,8 +239,9 @@ fn test_spillman_lock_timeout_path() {
     );
 
     // For timeout path: only one output (user refund)
-    // Set since to a value greater than timeout_epoch to simulate timeout
-    let since_value = Since::from_epoch(EpochNumberWithFraction::new(50, 0, 1), false);
+    // Set since to a value greater than timeout_timestamp to simulate timeout
+    let since_timestamp = timeout_timestamp + 86400; // 1 day after timeout
+    let since_value = Since::from_timestamp(since_timestamp, true).expect("valid since");
 
     let input = CellInput::new_builder()
         .previous_output(input_out_point.clone())
@@ -268,7 +273,8 @@ fn test_spillman_lock_timeout_path() {
     println!("consume cycles: {}", cycles);
 
     // Test: timeout not reached should fail
-    let early_since = Since::from_epoch(EpochNumberWithFraction::new(10, 0, 1), false);
+    let early_timestamp = timeout_timestamp - 3600; // 1 hour before timeout
+    let early_since = Since::from_timestamp(early_timestamp, true).expect("valid since");
     let early_input = success_tx
         .inputs()
         .get(0)
@@ -286,6 +292,27 @@ fn test_spillman_lock_timeout_path() {
         .verify_tx(&early_tx, 10_000_000)
         .expect_err("timeout not reached should fail verification");
     println!("error (timeout not reached): {:?}", err);
+
+    // Test: incomparable since types should fail (block-based since vs epoch-based timeout)
+    // This tests the security fix: since >= timeout properly rejects incomparable types
+    let block_based_since = Since::from_block_number(1000, false).unwrap(); // Block-based since
+    let incomparable_input = success_tx
+        .inputs()
+        .get(0)
+        .unwrap()
+        .as_builder()
+        .since(block_based_since.as_u64().pack())
+        .build();
+
+    let incomparable_tx = success_tx
+        .as_advanced_builder()
+        .set_inputs(vec![incomparable_input])
+        .build();
+
+    let err = context
+        .verify_tx(&incomparable_tx, 10_000_000)
+        .expect_err("incomparable since types should fail verification");
+    println!("error (incomparable since types): {:?}", err);
 
     // Test: invalid unlock type should fail
     let invalid_unlock_type = 0x02; // not COMMITMENT(0x00) or TIMEOUT(0x01)
@@ -361,14 +388,16 @@ fn test_spillman_lock_timeout_path_with_co_funding() {
 
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
     let args = [
         merchant_pubkey_hash.as_ref(),
         user_pubkey_hash.as_ref(),
-        &timeout_epoch.as_u64().to_le_bytes(),
+        &timeout_since.as_u64().to_le_bytes(),
         &[algorithm_id],
         &[version],
     ]
@@ -418,7 +447,8 @@ fn test_spillman_lock_timeout_path_with_co_funding() {
         Bytes::new(),
     );
 
-    let since_value = Since::from_epoch(EpochNumberWithFraction::new(50, 0, 1), false);
+    let since_timestamp = timeout_timestamp + 86400; // 1 day after timeout
+    let since_value = Since::from_timestamp(since_timestamp, true).expect("valid since");
 
     let input = CellInput::new_builder()
         .previous_output(input_out_point.clone())
@@ -538,14 +568,16 @@ fn test_spillman_lock_timeout_path_with_xudt() {
 
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
     let args = [
         merchant_pubkey_hash.as_ref(),
         user_pubkey_hash.as_ref(),
-        &timeout_epoch.as_u64().to_le_bytes(),
+        &timeout_since.as_u64().to_le_bytes(),
         &[algorithm_id],
         &[version],
     ]
@@ -589,7 +621,8 @@ fn test_spillman_lock_timeout_path_with_xudt() {
         xudt_amount.to_le_bytes().to_vec().into(),
     );
 
-    let since_value = Since::from_epoch(EpochNumberWithFraction::new(50, 0, 1), false);
+    let since_timestamp = timeout_timestamp + 86400; // 1 day after timeout
+    let since_value = Since::from_timestamp(since_timestamp, true).expect("valid since");
 
     let input = CellInput::new_builder()
         .previous_output(input_out_point.clone())
@@ -666,14 +699,16 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
 
     let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 0; // Single-sig
     let version: u8 = 0;
 
     let args = [
         merchant_pubkey_hash.as_ref(),
         user_pubkey_hash.as_ref(),
-        &timeout_epoch.as_u64().to_le_bytes(),
+        &timeout_since.as_u64().to_le_bytes(),
         &[algorithm_id],
         &[version],
     ]
@@ -734,7 +769,8 @@ fn test_spillman_lock_timeout_path_with_xudt_co_funding() {
         xudt_amount.to_le_bytes().to_vec().into(),
     );
 
-    let since_value = Since::from_epoch(EpochNumberWithFraction::new(50, 0, 1), false);
+    let since_timestamp = timeout_timestamp + 86400; // 1 day after timeout
+    let since_value = Since::from_timestamp(since_timestamp, true).expect("valid since");
 
     let input = CellInput::new_builder()
         .previous_output(input_out_point.clone())
@@ -942,7 +978,9 @@ fn test_spillman_lock_commitment_path_with_multisig_merchant() {
     let merchant_pubkey_hash3 = blake160(&merchant_key3.1.serialize());
 
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 6; // Multi-sig
     let version: u8 = 0;
 
@@ -965,7 +1003,7 @@ fn test_spillman_lock_commitment_path_with_multisig_merchant() {
     let args = [
         merchant_lock_arg,
         user_pubkey_hash.as_ref(),
-        &timeout_epoch.as_u64().to_le_bytes(),
+        &timeout_since.as_u64().to_le_bytes(),
         &[algorithm_id],
         &[version],
     ]
@@ -1102,7 +1140,9 @@ fn test_spillman_lock_timeout_path_with_multisig_merchant() {
     let merchant_pubkey_hash3 = blake160(&merchant_key3.1.serialize());
 
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 6; // Multi-sig
     let version: u8 = 0;
 
@@ -1125,7 +1165,7 @@ fn test_spillman_lock_timeout_path_with_multisig_merchant() {
     let args = [
         merchant_lock_arg,
         user_pubkey_hash.as_ref(),
-        &timeout_epoch.as_u64().to_le_bytes(),
+        &timeout_since.as_u64().to_le_bytes(),
         &[algorithm_id],
         &[version],
     ]
@@ -1156,9 +1196,12 @@ fn test_spillman_lock_timeout_path_with_multisig_merchant() {
         Bytes::new(),
     );
 
+    let since_timestamp = timeout_timestamp + 86400; // 1 day after timeout
+    let since_value = Since::from_timestamp(since_timestamp, true).expect("valid since");
+
     let input = CellInput::new_builder()
         .previous_output(input_out_point.clone())
-        .since(timeout_epoch.as_u64().pack())
+        .since(since_value.as_u64().pack())
         .build();
 
     // Refund: all funds go back to user
@@ -1227,7 +1270,9 @@ fn test_spillman_lock_multisig_error_scenarios() {
     let merchant_pubkey_hash3 = blake160(&merchant_key3.1.serialize());
 
     let user_pubkey_hash = blake160(&user_key.1.serialize());
-    let timeout_epoch = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), false);
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
     let algorithm_id: u8 = 6; // Multi-sig
     let version: u8 = 0;
 
@@ -1250,7 +1295,7 @@ fn test_spillman_lock_multisig_error_scenarios() {
     let args = [
         merchant_lock_arg,
         user_pubkey_hash.as_ref(),
-        &timeout_epoch.as_u64().to_le_bytes(),
+        &timeout_since.as_u64().to_le_bytes(),
         &[algorithm_id],
         &[version],
     ]
@@ -1464,4 +1509,214 @@ fn compute_signing_message(tx: &TransactionView) -> [u8; 32] {
         .cell_deps(Default::default())
         .build();
     blake2b_256(tx.as_slice())
+}
+
+/// Test timeout path with timestamp-based since (instead of epoch-based)
+/// This tests the recommendation to use timestamp for better UX
+#[test]
+fn test_spillman_lock_timeout_path_with_timestamp() {
+    // deploy contract
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    // Use timestamp instead of epoch
+    // Simulating "7 days from now" timeout
+    // In real scenario: now + 7 * 24 * 60 * 60
+    // For testing: use a fixed timestamp
+    let timeout_timestamp = 1735689600u64; // 2025-01-01 00:00:00 UTC
+    let timeout_since = Since::from_timestamp(timeout_timestamp, true)
+        .expect("valid timestamp since");
+
+    // Build SpillmanLockArgs with timestamp
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let algorithm_id: u8 = 0; // Single-sig
+    let version: u8 = 0;
+
+    let spillman_lock_args = [
+        merchant_pubkey_hash.as_ref(),             // 0..20: merchant lock arg
+        user_pubkey_hash.as_ref(),                 // 20..40: user pubkey hash
+        &timeout_since.as_u64().to_le_bytes(),    // 40..48: timeout timestamp (little-endian)
+        &[algorithm_id],                           // 48: algorithm_id
+        &[version],                                // 49: version
+    ]
+    .concat();
+
+    // Create merchant lock script (secp256k1_blake160_sighash_all)
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    println!(
+        "\n=== Timestamp-based Timeout Test ===\n  Timeout: {} (Unix timestamp)\n  Since value: 0x{:016x}",
+        timeout_timestamp,
+        timeout_since.as_u64()
+    );
+
+    let spillman_lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(spillman_lock_args))
+        .expect("script");
+
+
+    // prepare cells
+    let cell_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_cell_dep = CellDep::new_builder()
+        .out_point(auth_out_point.clone())
+        .build();
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(500_0000_0000u64.pack()) // 500 CKB
+            .lock(spillman_lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    // Build refund transaction with timestamp since
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(timeout_since.as_u64().pack()) // Use timestamp since!
+        .build();
+
+    // Calculate capacities
+    let total_capacity = 500_0000_0000u64; // 500 CKB
+    let merchant_lock_cell_capacity = {
+        use ckb_testtool::ckb_types::core::Capacity;
+        CellOutput::new_builder()
+            .capacity(0u64.pack())
+            .lock(merchant_lock_script.clone())
+            .build()
+            .occupied_capacity(Capacity::bytes(0).unwrap())
+            .unwrap()
+            .as_u64()
+    };
+
+    let outputs = vec![
+        // User output (gets most of the funds)
+        CellOutput::new_builder()
+            .capacity((total_capacity - merchant_lock_cell_capacity).pack())
+            .lock(
+                Script::new_builder()
+                    .code_hash(SECP256K1_CODE_HASH.pack())
+                    .hash_type(ScriptHashType::Type.into())
+                    .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+                    .build(),
+            )
+            .build(),
+        // Merchant output (minimal capacity)
+        CellOutput::new_builder()
+            .capacity(merchant_lock_cell_capacity.pack())
+            .lock(merchant_lock_script.clone())
+            .build(),
+    ];
+
+    let outputs_data: Vec<Bytes> = vec![Bytes::new(), Bytes::new()];
+
+    // Prepare cell_deps
+    let cell_deps = CellDepVec::new_builder()
+        .push(cell_dep.clone())
+        .push(auth_cell_dep.clone())
+        .build();
+
+    // Build and sign the transaction
+    let success_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs.clone(),
+        outputs_data.clone(),
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
+
+    println!("  Testing successful unlock with timestamp since >= timeout...");
+    let cycles = context
+        .verify_tx(&success_tx, 10_000_000)
+        .expect("timestamp since should pass when >= timeout");
+    println!("  ✓ Success! Cycles consumed: {}", cycles);
+
+    // Test: timeout not reached (using earlier timestamp)
+    println!("\n  Testing early unlock (should fail)...");
+    let early_timestamp = timeout_timestamp - 3600; // 1 hour before timeout
+    let early_since = Since::from_timestamp(early_timestamp, true).unwrap();
+    let early_input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(early_since.as_u64().pack())
+        .build();
+
+    let early_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        early_input,
+        outputs.clone(),
+        outputs_data.clone(),
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&early_tx, 10_000_000)
+        .expect_err("early timestamp should fail");
+    println!("  ✓ Correctly rejected! Error: {:?}", err);
+
+    // Test: incomparable types (timestamp vs epoch)
+    println!("\n  Testing incomparable types (timestamp vs epoch)...");
+    let epoch_since = Since::from_epoch(EpochNumberWithFraction::new(42, 0, 1), true);
+    let incomparable_input = CellInput::new_builder()
+        .previous_output(input_out_point.clone())
+        .since(epoch_since.as_u64().pack())
+        .build();
+
+    let incomparable_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        incomparable_input,
+        outputs.clone(),
+        outputs_data.clone(),
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&incomparable_tx, 10_000_000)
+        .expect_err("timestamp timeout vs epoch since should fail");
+    println!("  ✓ Correctly rejected incomparable types! Error: {:?}", err);
+
+    // Test: timestamp in the future (should succeed)
+    println!("\n  Testing future timestamp (should succeed)...");
+    let future_timestamp = timeout_timestamp + 86400; // 1 day after timeout
+    let future_since = Since::from_timestamp(future_timestamp, true).unwrap();
+    let future_input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .since(future_since.as_u64().pack())
+        .build();
+
+    let future_tx = build_and_sign_tx(
+        cell_deps,
+        future_input,
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let cycles = context
+        .verify_tx(&future_tx, 10_000_000)
+        .expect("future timestamp should pass");
+    println!("  ✓ Success! Cycles consumed: {}", cycles);
+
+    println!("\n=== All Timestamp Since Tests Passed! ===\n");
 }
