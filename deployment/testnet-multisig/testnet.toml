@@ -1,0 +1,30 @@
+[[cells]]
+name = "auth"
+enable_type_id = false
+location = { file = "../../deps/auth" }
+
+[[cells]]
+name = "spillman-lock"
+enable_type_id = true
+location = { file = "../../build/release/spillman-lock" }
+
+[[dep_groups]]
+name = "dep_group"
+cells = [
+    "auth",
+    "spillman-lock"
+]
+
+[lock]
+code_hash = "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8"
+hash_type = "type"
+args = "0x487a79652c4aced0e3242d86e305afed27edf409"
+
+[multisig_config]
+sighash_addresses = [
+    "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtvslutfqdyzck4dxlsspvgqrvhxggmq6gq7dxcy",
+    "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwpdy974a8nmdqrl6xyucm548p33zsa00swd0nee",
+    "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2j8pn53n34mv8vs2a0sq206guq28nh65sxc3a30"
+]
+require_first_n = 0
+threshold = 3
