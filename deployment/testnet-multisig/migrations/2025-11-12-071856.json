@@ -1,0 +1,29 @@
+{
+  "cell_recipes": [
+    {
+      "name": "auth",
+      "tx_hash": "0x0c5a88d2d02dd6bb69e66965cdb100d2827afb61569fb4b59f73c1a4cb074225",
+      "index": 0,
+      "occupied_capacity": 15096500000000,
+      "data_hash": "0x07f2364fe08ef796277d85ead9f44140b5c60feb7a6332f66c6794fdefc3645b",
+      "type_id": null
+    },
+    {
+      "name": "spillman-lock",
+      "tx_hash": "0x0c5a88d2d02dd6bb69e66965cdb100d2827afb61569fb4b59f73c1a4cb074225",
+      "index": 1,
+      "occupied_capacity": 6771800000000,
+      "data_hash": "0x158bb5f895be5781a96fe1351ddd7b1c83e5ca802bc1c72b6fdb7f8ec06db14d",
+      "type_id": "0xef732d210722f75e9ecb85df8de9ddce246a447f67dfe3ed53eeaac69f60d89c"
+    }
+  ],
+  "dep_group_recipes": [
+    {
+      "name": "dep_group",
+      "tx_hash": "0x881a539ef1c021b51c5dffebfecc9dc4eaf28c0bfc6fb6f5a5771f3588e072a2",
+      "index": 0,
+      "data_hash": "0x6f29df1a3e466696c94a80ec07452bb2a6b45f58b34fcd74c144e5e2e44d5508",
+      "occupied_capacity": 13700000000
+    }
+  ]
+}
