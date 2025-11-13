@@ -1734,3 +1734,885 @@ fn test_spillman_lock_timeout_path_with_timestamp() {
 
     println!("\n=== All Timestamp Since Tests Passed! ===\n");
 }
+
+#[test]
+fn test_spillman_lock_commitment_path_with_xudt() {
+    // Test commitment path with xUDT: merchant receives xUDT payment
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let simple_udt_bin: Bytes = loader.load_binary("../../deps/simple_udt");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+    let simple_udt_out_point = context.deploy_cell(simple_udt_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_timestamp = 1735689600u64;
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
+    let algorithm_id: u8 = 0;
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_since.as_u64().to_le_bytes(),
+        &[algorithm_id],
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    // Create xUDT type script
+    let udt_owner_lock_hash = [42u8; 32];
+    let type_script = context
+        .build_script(&simple_udt_out_point, udt_owner_lock_hash.to_vec().into())
+        .expect("script");
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let simple_udt_dep = CellDep::new_builder()
+        .out_point(simple_udt_out_point)
+        .build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep, simple_udt_dep].pack();
+
+    let xudt_amount = 1000u128;
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        xudt_amount.to_le_bytes().to_vec().into(),
+    );
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    // Commitment: user gets 300 xUDT, merchant gets 700 xUDT
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+    ];
+
+    let outputs_data: Vec<Bytes> = vec![
+        300u128.to_le_bytes().to_vec().into(),
+        700u128.to_le_bytes().to_vec().into(),
+    ];
+
+    let success_tx = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs,
+        outputs_data,
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let cycles = context
+        .verify_tx(&success_tx, 10_000_000)
+        .expect("pass verification");
+    println!("consume cycles (commitment with xUDT): {}", cycles);
+
+    // Test: merchant xUDT amount is 0 should fail
+    let wrong_outputs = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script.clone()) // Use correct merchant lock!
+            .type_(Some(type_script.clone()).pack())
+            .build(),
+    ];
+
+    let wrong_outputs_data: Vec<Bytes> = vec![
+        1000u128.to_le_bytes().to_vec().into(),
+        0u128.to_le_bytes().to_vec().into(), // merchant gets 0 xUDT (should fail!)
+    ];
+
+    let wrong_tx = build_and_sign_tx(
+        cell_deps,
+        input,
+        wrong_outputs,
+        wrong_outputs_data,
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&wrong_tx, 10_000_000)
+        .expect_err("merchant xUDT amount 0 should fail");
+    println!("error (merchant xUDT is 0): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_commitment_path_output_structure_errors() {
+    // Test various output structure errors in commitment path
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_timestamp = 1735689600u64;
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
+    let algorithm_id: u8 = 0;
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_since.as_u64().to_le_bytes(),
+        &[algorithm_id],
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    // Test 1: Only 1 output (should fail, need exactly 2)
+    let outputs_1 = vec![CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack())
+        .lock(user_lock_script.clone())
+        .build()];
+
+    let fail_tx_1 = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs_1,
+        vec![Bytes::new()],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_1, 10_000_000)
+        .expect_err("commitment with 1 output should fail");
+    println!("error (1 output): {:?}", err);
+
+    // Test 2: 3 outputs (should fail, need exactly 2)
+    let outputs_3 = vec![
+        CellOutput::new_builder()
+            .capacity(33_333_333_333u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(33_333_333_333u64.pack())
+            .lock(merchant_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(33_333_333_333u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+    ];
+
+    let fail_tx_3 = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs_3,
+        vec![Bytes::new(); 3],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_3, 10_000_000)
+        .expect_err("commitment with 3 outputs should fail");
+    println!("error (3 outputs): {:?}", err);
+
+    // Test 3: Output 0 is not user address (merchant instead)
+    let outputs_wrong_user = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script.clone()) // Wrong! Should be user
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script.clone())
+            .build(),
+    ];
+
+    let fail_tx_wrong_user = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs_wrong_user,
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_wrong_user, 10_000_000)
+        .expect_err("Output 0 not user address should fail");
+    println!("error (Output 0 wrong): {:?}", err);
+
+    // Test 4: Output 1 is not merchant address (user instead)
+    let outputs_wrong_merchant = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone()) // Wrong! Should be merchant
+            .build(),
+    ];
+
+    let fail_tx_wrong_merchant = build_and_sign_tx(
+        cell_deps.clone(),
+        input.clone(),
+        outputs_wrong_merchant,
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_wrong_merchant, 10_000_000)
+        .expect_err("Output 1 not merchant address should fail");
+    println!("error (Output 1 wrong): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_ommitment_path_witness_format_errors() {
+    // Test various witness format errors
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_timestamp = 1735689600u64;
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
+    let algorithm_id: u8 = 0;
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_since.as_u64().to_le_bytes(),
+        &[algorithm_id],
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script)
+            .build(),
+    ];
+
+    let outputs_data = vec![Bytes::new(); 2];
+
+    let tx = TransactionBuilder::default()
+        .cell_deps(cell_deps.clone())
+        .input(input.clone())
+        .outputs(outputs.clone())
+        .outputs_data(outputs_data.clone().pack())
+        .build();
+
+    // Test 1: Witness too short (less than min length)
+    let short_witness = vec![0u8; 10]; // Way too short
+    let fail_tx_1 = tx
+        .as_advanced_builder()
+        .witness(short_witness.pack())
+        .build();
+
+    let err = context
+        .verify_tx(&fail_tx_1, 10_000_000)
+        .expect_err("short witness should fail");
+    println!("error (witness too short): {:?}", err);
+
+    // Test 2: Wrong empty_witness_args prefix
+    let message = compute_signing_message(&tx);
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+
+    let wrong_empty_witness_args = [99u8; 16]; // Wrong prefix
+    let wrong_witness = [
+        &wrong_empty_witness_args[..],
+        &[UNLOCK_TYPE_COMMITMENT][..],
+        &merchant_signature[..],
+        &user_signature[..],
+    ]
+    .concat();
+
+    let fail_tx_2 = tx
+        .as_advanced_builder()
+        .witness(wrong_witness.pack())
+        .build();
+
+    let err = context
+        .verify_tx(&fail_tx_2, 10_000_000)
+        .expect_err("wrong empty_witness_args should fail");
+    println!("error (wrong empty_witness_args): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_ommitment_path_args_validation_errors() {
+    // Test various args validation errors
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_timestamp = 1735689600u64;
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point.clone())
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    // Test 1: Args too short (not 50 bytes)
+    let short_args = vec![0u8; 20]; // Only 20 bytes
+    let lock_script_1 = context
+        .build_script(&spillman_lock_out_point, Bytes::from(short_args))
+        .expect("script");
+
+    let input_out_point_1 = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script_1.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input_1 = CellInput::new_builder()
+        .previous_output(input_out_point_1)
+        .build();
+
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script.clone())
+            .build(),
+    ];
+
+    let fail_tx_1 = build_and_sign_tx(
+        cell_deps.clone(),
+        input_1,
+        outputs.clone(),
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_1, 10_000_000)
+        .expect_err("args too short should fail");
+    println!("error (args too short): {:?}", err);
+
+    // Test 2: Args too long
+    let long_args = vec![0u8; 100]; // 100 bytes
+    let lock_script_2 = context
+        .build_script(&spillman_lock_out_point, Bytes::from(long_args))
+        .expect("script");
+
+    let input_out_point_2 = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script_2.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input_2 = CellInput::new_builder()
+        .previous_output(input_out_point_2)
+        .build();
+
+    let fail_tx_2 = build_and_sign_tx(
+        cell_deps.clone(),
+        input_2,
+        outputs.clone(),
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_2, 10_000_000)
+        .expect_err("args too long should fail");
+    println!("error (args too long): {:?}", err);
+
+    // Test 3: Unsupported version (not 0)
+    let bad_version: u8 = 1; // Wrong version
+    let args_bad_version = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_since.as_u64().to_le_bytes(),
+        &[0u8][..], // algorithm_id = 0
+        &[bad_version][..],
+    ]
+    .concat();
+
+    let lock_script_3 = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args_bad_version))
+        .expect("script");
+
+    let input_out_point_3 = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script_3.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input_3 = CellInput::new_builder()
+        .previous_output(input_out_point_3)
+        .build();
+
+    let fail_tx_3 = build_and_sign_tx(
+        cell_deps.clone(),
+        input_3,
+        outputs.clone(),
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_3, 10_000_000)
+        .expect_err("unsupported version should fail");
+    println!("error (unsupported version): {:?}", err);
+
+    // Test 4: Invalid algorithm_id
+    let invalid_algorithm_id: u8 = 99; // Not 0, 6, or 7
+    let args_bad_algorithm = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_since.as_u64().to_le_bytes(),
+        &[invalid_algorithm_id][..],
+        &[0u8][..], // version = 0
+    ]
+    .concat();
+
+    let lock_script_4 = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args_bad_algorithm))
+        .expect("script");
+
+    let input_out_point_4 = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script_4.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input_4 = CellInput::new_builder()
+        .previous_output(input_out_point_4)
+        .build();
+
+    let fail_tx_4 = build_and_sign_tx(
+        cell_deps,
+        input_4,
+        outputs,
+        vec![Bytes::new(); 2],
+        UNLOCK_TYPE_COMMITMENT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx_4, 10_000_000)
+        .expect_err("invalid algorithm_id should fail");
+    println!("error (invalid algorithm_id): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_commitment_path_multiple_inputs() {
+    // Test multiple inputs (should fail with Error::MultipleInputs)
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_timestamp = 1735689600u64;
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
+    let algorithm_id: u8 = 0;
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_since.as_u64().to_le_bytes(),
+        &[algorithm_id],
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    // Create 2 inputs with the same lock script
+    let input_out_point_1 = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input_out_point_2 = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let input_1 = CellInput::new_builder()
+        .previous_output(input_out_point_1)
+        .build();
+
+    let input_2 = CellInput::new_builder()
+        .previous_output(input_out_point_2)
+        .build();
+
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(50_000_000_000u64.pack())
+            .lock(merchant_lock_script)
+            .build(),
+    ];
+
+    let outputs_data = vec![Bytes::new(); 2];
+
+    // Build transaction with 2 inputs
+    let tx = TransactionBuilder::default()
+        .cell_deps(cell_deps)
+        .inputs(vec![input_1, input_2]) // 2 inputs!
+        .outputs(outputs)
+        .outputs_data(outputs_data.pack())
+        .build();
+
+    let message = compute_signing_message(&tx);
+    let user_signature = user_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+    let merchant_signature = merchant_key
+        .0
+        .sign_recoverable(&message.into())
+        .unwrap()
+        .serialize();
+
+    let witness = [
+        &EMPTY_WITNESS_ARGS[..],
+        &[UNLOCK_TYPE_COMMITMENT][..],
+        &merchant_signature[..],
+        &user_signature[..],
+    ]
+    .concat();
+
+    let fail_tx = tx
+        .as_advanced_builder()
+        .witness(witness.pack())
+        .witness(Bytes::new().pack()) // witness for 2nd input
+        .build();
+
+    let err = context
+        .verify_tx(&fail_tx, 10_000_000)
+        .expect_err("multiple inputs should fail");
+    println!("error (multiple inputs): {:?}", err);
+}
+
+#[test]
+fn test_spillman_lock_timeout_path_too_many_outputs() {
+    // Test timeout path with 3+ outputs (should fail)
+    let mut context = Context::default();
+    let loader = Loader::default();
+    let spillman_lock_bin: Bytes = loader.load_binary("spillman-lock");
+    let auth_bin: Bytes = loader.load_binary("../../deps/auth");
+    let spillman_lock_out_point = context.deploy_cell(spillman_lock_bin);
+    let auth_out_point = context.deploy_cell(auth_bin);
+
+    let mut generator = Generator::new();
+    let user_key = generator.gen_keypair();
+    let merchant_key = generator.gen_keypair();
+
+    let merchant_pubkey_hash = blake160(&merchant_key.1.serialize());
+    let user_pubkey_hash = blake160(&user_key.1.serialize());
+    let timeout_timestamp = 1735689600u64;
+    let timeout_since =
+        Since::from_timestamp(timeout_timestamp, true).expect("valid timestamp since");
+    let algorithm_id: u8 = 0;
+    let version: u8 = 0;
+
+    let args = [
+        merchant_pubkey_hash.as_ref(),
+        user_pubkey_hash.as_ref(),
+        &timeout_since.as_u64().to_le_bytes(),
+        &[algorithm_id],
+        &[version],
+    ]
+    .concat();
+
+    let lock_script = context
+        .build_script(&spillman_lock_out_point, Bytes::from(args))
+        .expect("script");
+
+    let user_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(user_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let merchant_lock_script = Script::new_builder()
+        .code_hash(SECP256K1_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(merchant_pubkey_hash.as_ref().to_vec()).pack())
+        .build();
+
+    let spillman_lock_dep = CellDep::new_builder()
+        .out_point(spillman_lock_out_point)
+        .build();
+    let auth_dep = CellDep::new_builder().out_point(auth_out_point).build();
+    let cell_deps = vec![spillman_lock_dep, auth_dep].pack();
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(100_100_000_000u64.pack())
+            .lock(lock_script.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let since_timestamp = timeout_timestamp + 86400;
+    let since_value = Since::from_timestamp(since_timestamp, true).expect("valid since");
+
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .since(since_value.as_u64().pack())
+        .build();
+
+    // 3 outputs (should fail, max is 2)
+    let outputs = vec![
+        CellOutput::new_builder()
+            .capacity(33_333_333_333u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+        CellOutput::new_builder()
+            .capacity(33_333_333_333u64.pack())
+            .lock(merchant_lock_script)
+            .build(),
+        CellOutput::new_builder()
+            .capacity(33_333_333_333u64.pack())
+            .lock(user_lock_script.clone())
+            .build(),
+    ];
+
+    let fail_tx = build_and_sign_tx(
+        cell_deps,
+        input,
+        outputs,
+        vec![Bytes::new(); 3],
+        UNLOCK_TYPE_TIMEOUT,
+        &user_key,
+        &merchant_key,
+    );
+
+    let err = context
+        .verify_tx(&fail_tx, 10_000_000)
+        .expect_err("timeout with 3 outputs should fail");
+    println!("error (3 outputs in timeout): {:?}", err);
+}
