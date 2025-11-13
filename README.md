@@ -118,7 +118,7 @@ All tests pass with 100% success rate.
 ## Deployment
 
 Contracts are deployed on:
-- **Testnet**: See `migrations/testnet/`
+- **Testnet**: See [`testnet/migrations`](./deployment/testnet/migrations/)
 - **Mainnet**: TBD
 
 ## Security Considerations
