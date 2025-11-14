@@ -39,7 +39,6 @@ pub async fn build_funding_transaction(
     user_address: &Address,
     spillman_lock_script: &Script,
     capacity_ckb: u64,
-    fee_rate: u64,
     output_path: &str,
 ) -> Result<(H256, u32)> {
     let capacity_shannon = capacity_ckb * 100_000_000;
@@ -175,7 +174,7 @@ pub async fn build_cofund_funding_transaction(
         .as_u64();
 
     // User adds extra 1 CKB as buffer (for fees, etc.)
-    let user_buffer_shannon = 1 * 100_000_000;
+    let user_buffer_shannon = 100_000_000;
 
     println!("  - User 需出资: {} CKB + 1 CKB buffer", user_capacity_ckb);
     println!(

@@ -9,10 +9,7 @@ use ckb_types::{
 use serde::{Deserialize, Serialize};
 use std::{fs, str::FromStr};
 
-use crate::{
-    storage::tx_storage::generate_tx_filename,
-    tx_builder::commitment::build_commitment_transaction, utils::config::load_config,
-};
+use crate::{tx_builder::commitment::build_commitment_transaction, utils::config::load_config};
 
 /// Channel information loaded from file
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,7 +154,7 @@ pub async fn execute(
 
         let decimal = usdi_config.decimal;
         let multiplier = 10u128.pow(decimal as u32);
-        let xudt_payment = ((payment_amount_f64 * multiplier as f64) as u128);
+        let xudt_payment = (payment_amount_f64 * multiplier as f64) as u128;
 
         println!("\n💰 xUDT 支付详情:");
         println!(
@@ -260,7 +257,7 @@ pub async fn execute(
     // 7. Build and save commitment transaction
     // Use cleaned amount string for filename (replace '.' with '_')
     let amount_str = amount.replace('.', "_");
-    let output_file = generate_tx_filename("commitment", Some(&format!("{}_ckb", amount_str)));
+    let output_file = format!("commitment_{}_ckb.json", amount_str);
 
     let (_tx_hash, _tx) = build_commitment_transaction(
         &config,

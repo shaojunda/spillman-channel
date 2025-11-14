@@ -1,14 +1,12 @@
 use anyhow::{anyhow, Result};
-use ckb_sdk::{rpc::CkbRpcClient, Address};
+use ckb_sdk::Address;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::str::FromStr;
 
 use crate::tx_builder::funding::{build_cofund_funding_transaction, build_funding_transaction};
 use crate::tx_builder::funding_v2;
-use crate::tx_builder::spillman_lock::{
-    build_spillman_lock_script, build_spillman_lock_script_with_hash,
-};
+use crate::tx_builder::spillman_lock::build_spillman_lock_script_with_hash;
 use crate::utils::config::load_config;
 use crate::utils::crypto::parse_privkey;
 
@@ -38,7 +36,6 @@ pub async fn execute(
     timeout_timestamp: Option<u64>,
     fee_rate: u64,
     co_fund: bool,
-    broadcast: bool,
 ) -> Result<()> {
     println!("🚀 执行 set-up 命令 - 准备 Spillman Channel");
     println!("==========================================\n");
@@ -120,7 +117,6 @@ pub async fn execute(
 
     // 3. Connect to CKB network
     println!("\n🔗 连接到 CKB 网络...");
-    let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
 
     // Get current timestamp from system time
     let current_timestamp = std::time::SystemTime::now()
@@ -218,7 +214,6 @@ pub async fn execute(
             &user_addr_parsed,
             &spillman_lock_script,
             capacity,
-            fee_rate,
             funding_info_path,
         )
         .await?
@@ -362,7 +357,6 @@ pub async fn execute_v2(
 
     // 3. Connect to CKB network
     println!("\n🔗 连接到 CKB 网络...");
-    let rpc_client = CkbRpcClient::new(&config.network.rpc_url);
 
     // Get current timestamp from system time
     let current_timestamp = std::time::SystemTime::now()

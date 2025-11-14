@@ -371,7 +371,7 @@ fn build_commitment_transaction_internal(
             .build();
 
         // Convert to TransactionView
-        let tx_view: TransactionView = tx.into();
+        let tx_view: TransactionView = tx;
 
         // Sign the transaction with user's key
         let signed_tx =
@@ -379,7 +379,7 @@ fn build_commitment_transaction_internal(
 
         // Calculate actual fee for this transaction
         let tx_size = signed_tx.data().as_reader().serialized_size_in_block() as u64;
-        let actual_fee = (tx_size * fee_rate + 999) / 1000; // Round up
+        let actual_fee = (tx_size * fee_rate).div_ceil(1000); // Round up
 
         println!("Iteration {}: Actual fee: {} CKB", iteration, actual_fee);
 
@@ -445,7 +445,7 @@ fn sign_commitment_transaction(
         .set_witnesses(vec![Bytes::from(new_witness).pack()])
         .build();
 
-    let new_tx_view: TransactionView = new_tx.into();
+    let new_tx_view: TransactionView = new_tx;
 
     Ok(new_tx_view)
 }

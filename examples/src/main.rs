@@ -2,8 +2,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod commands;
-mod signer;
-mod storage;
 mod tx_builder;
 mod utils;
 
@@ -170,7 +168,6 @@ async fn main() -> Result<()> {
                     timeout_timestamp,
                     fee_rate,
                     co_fund,
-                    broadcast,
                 )
                 .await?;
             }

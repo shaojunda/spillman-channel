@@ -114,10 +114,6 @@ impl FundingTx {
         self.tx.take()
     }
 
-    pub fn as_ref(&self) -> Option<&TransactionView> {
-        self.tx.as_ref()
-    }
-
     pub fn into_inner(self) -> Option<TransactionView> {
         self.tx
     }
@@ -148,44 +144,6 @@ impl FundingTx {
             context,
         };
         builder.build_internal(false).await
-    }
-
-    /// Sign the funding transaction (single key, for backward compatibility)
-    pub async fn sign(self, secret_key: secp256k1::SecretKey, rpc_url: String) -> Result<Self> {
-        self.sign_with_keys(vec![secret_key], None, rpc_url).await
-    }
-
-    /// Sign the funding transaction with multiple keys and optional multisig config
-    pub async fn sign_with_keys(
-        mut self,
-        secret_keys: Vec<secp256k1::SecretKey>,
-        _multisig_config: Option<SdkMultisigConfig>,
-        rpc_url: String,
-    ) -> Result<Self> {
-        let signer = SecpCkbRawKeySigner::new_with_secret_keys(secret_keys);
-        let sighash_unlocker = SecpSighashUnlocker::from(Box::new(signer) as Box<_>);
-        let sighash_script_id = ScriptId::new_type(SIGHASH_TYPE_HASH.clone());
-        let mut unlockers = HashMap::default();
-        unlockers.insert(
-            sighash_script_id,
-            Box::new(sighash_unlocker) as Box<dyn ScriptUnlocker>,
-        );
-
-        let tx = self
-            .take()
-            .ok_or_else(|| anyhow!("No transaction to sign"))?;
-        let tx_dep_provider = DefaultTransactionDependencyProvider::new(&rpc_url, 10);
-
-        let (tx, still_locked_groups) = unlock_tx(tx, &tx_dep_provider, &unlockers)?;
-        if !still_locked_groups.is_empty() {
-            return Err(anyhow!(
-                "Some script groups are still locked: {:?}",
-                still_locked_groups
-            ));
-        }
-
-        self.update(tx);
-        Ok(self)
     }
 
     /// Sign the funding transaction with multiple keys (for co-funding)
@@ -416,7 +374,7 @@ impl FundingTxBuilder {
     /// 2. Add xUDT change output if there's余额
     async fn balance_xudt_cells(
         &self,
-        mut base_tx: TransactionView,
+        base_tx: TransactionView,
         cell_collector: &mut dyn CellCollector,
         cell_dep_resolver: &dyn CellDepResolver,
     ) -> Result<TransactionView> {
@@ -738,7 +696,7 @@ impl FundingTxBuilder {
                 .collect();
             all_witnesses.extend(new_witnesses);
 
-            builder.set_witnesses(all_witnesses).build().into()
+            builder.set_witnesses(all_witnesses).build()
         } else {
             // First party: build, balance xUDT, balance capacity, then unlock
             let base_tx = self
@@ -1063,7 +1021,7 @@ pub async fn build_cofund_funding_transaction(
         .as_u64();
 
     // User adds extra 1 CKB as buffer (for fees, etc.)
-    let user_buffer_shannon = 1 * ONE_CKB;
+    let user_buffer_shannon = ONE_CKB;
 
     let user_amount = user_capacity_shannon + user_buffer_shannon;
     let merchant_amount = merchant_capacity_shannon;
@@ -1211,7 +1169,7 @@ pub async fn build_cofund_funding_transaction(
                 .cloned()
                 .collect()
         } else {
-            merchant_secret_keys.iter().cloned().collect()
+            merchant_secret_keys.to_vec()
         };
 
     let all_secret_keys: Vec<_> = user_secret_keys
@@ -1424,7 +1382,7 @@ pub fn build_multisig_config_with_type(
     for secret_key in secret_keys {
         let pubkey = secp256k1::PublicKey::from_secret_key(&secp, secret_key);
         let pubkey_bytes = pubkey.serialize();
-        let pubkey_hash = &blake2b_256(&pubkey_bytes)[0..20];
+        let pubkey_hash = &blake2b_256(pubkey_bytes)[0..20];
         sighash_addresses.push(H160::from_slice(pubkey_hash)?);
     }
 

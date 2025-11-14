@@ -68,29 +68,6 @@ pub fn calculate_refund_witness_size(merchant_multisig_config: Option<&MultisigC
     base_size + merchant_sig_size + user_sig_size
 }
 
-/// Calculate the total size of commitment witness
-///
-/// Commitment witness structure:
-/// - EMPTY_WITNESS_ARGS: 16 bytes
-/// - UNLOCK_TYPE_COMMITMENT: 1 byte
-/// - Merchant signature: variable (calculated by calculate_merchant_signature_size)
-/// - User signature: SIGNATURE_SIZE bytes
-///
-/// # Arguments
-/// * `merchant_multisig_config` - Optional multisig configuration for merchant
-///
-/// # Returns
-/// Total witness size in bytes
-pub fn calculate_commitment_witness_size(
-    merchant_multisig_config: Option<&MultisigConfig>,
-) -> usize {
-    let base_size = EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE;
-    let user_sig_size = SIGNATURE_SIZE;
-    let merchant_sig_size = calculate_merchant_signature_size(merchant_multisig_config);
-
-    base_size + merchant_sig_size + user_sig_size
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,16 +82,6 @@ mod tests {
     fn test_refund_witness_size_single_sig() {
         // Single-sig: EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE = 147 bytes
         let size = calculate_refund_witness_size(None);
-        assert_eq!(
-            size,
-            EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE
-        );
-    }
-
-    #[test]
-    fn test_commitment_witness_size_single_sig() {
-        // Single-sig: EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE = 147 bytes
-        let size = calculate_commitment_witness_size(None);
         assert_eq!(
             size,
             EMPTY_WITNESS_ARGS_SIZE + UNLOCK_TYPE_SIZE + SIGNATURE_SIZE + SIGNATURE_SIZE

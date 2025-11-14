@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use ckb_crypto::secp::Privkey;
 use ckb_hash::blake2b_256;
-use ckb_sdk::{constants::MultisigScript, rpc::CkbRpcClient, Address, ScriptId};
+use ckb_sdk::{constants::MultisigScript, rpc::CkbRpcClient, Address};
 use ckb_types::{
     bytes::Bytes,
     core::TransactionView,

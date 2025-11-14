@@ -77,7 +77,6 @@ use crate::utils::crypto::pubkey_hash;
 // Constants for witness structure
 const EMPTY_WITNESS_ARGS: [u8; 16] = [16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0];
 const UNLOCK_TYPE_TIMEOUT: u8 = 0x01;
-const REFUND_WITNESS_SIZE_SINGLE_SIG: usize = 147; // 16 + 1 + 65 + 65
 
 /// Calculate refund witness size based on merchant's signature type
 ///
@@ -140,11 +139,6 @@ impl RefundTx {
 
     pub fn take(&mut self) -> Option<TransactionView> {
         self.tx.take()
-    }
-
-    #[allow(dead_code)]
-    pub fn as_ref(&self) -> Option<&TransactionView> {
-        self.tx.as_ref()
     }
 
     pub fn into_inner(self) -> Option<TransactionView> {
@@ -219,7 +213,7 @@ impl RefundTx {
                 secp256k1::PublicKey::from_secret_key(&secp, &merchant_secret_keys[0]);
             let merchant_pubkey_bytes = merchant_pubkey_secp.serialize();
             use ckb_hash::blake2b_256;
-            let merchant_pubkey_hash_from_privkey = &blake2b_256(&merchant_pubkey_bytes)[0..20];
+            let merchant_pubkey_hash_from_privkey = &blake2b_256(merchant_pubkey_bytes)[0..20];
             if merchant_pubkey_hash_from_privkey != expected_merchant_hash {
                 return Err(anyhow!("Merchant pubkey hash mismatch!"));
             }
@@ -581,7 +575,7 @@ impl RefundTxBuilder {
 
             // Calculate actual fee for this transaction
             let tx_size = temp_tx.data().as_reader().serialized_size_in_block() as u64;
-            let actual_fee = (tx_size * fee_rate + 999) / 1000; // Round up
+            let actual_fee = (tx_size * fee_rate).div_ceil(1000); // Round up
 
             // Check if fee has stabilized
             if actual_fee == current_fee {
@@ -958,6 +952,8 @@ pub async fn build_refund_transaction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REFUND_WITNESS_SIZE_SINGLE_SIG: usize = 147; // 16 + 1 + 65 + 65
 
     #[test]
     fn test_refund_witness_size() {
