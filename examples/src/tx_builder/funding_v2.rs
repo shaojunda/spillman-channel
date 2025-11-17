@@ -1276,7 +1276,7 @@ mod tests {
     #[test]
     fn test_funding_tx_creation() {
         let funding_tx = FundingTx::new();
-        assert!(funding_tx.as_ref().is_none());
+        assert!(funding_tx.into_inner().is_none());
     }
 
     #[test]
