@@ -257,7 +257,7 @@ pub async fn execute(
     // 7. Build and save commitment transaction
     // Use cleaned amount string for filename (replace '.' with '_')
     let amount_str = amount.replace('.', "_");
-    let output_file = format!("commitment_{}_ckb.json", amount_str);
+    let output_file = generate_tx_filename("commitment", Some(&format!("{}_ckb", amount_str)));
 
     let (_tx_hash, _tx) = build_commitment_transaction(
         &config,
@@ -307,4 +307,17 @@ fn load_channel_info(file_path: &str) -> Result<ChannelInfo> {
         serde_json::from_str(&json).map_err(|e| anyhow!("Failed to parse channel info: {}", e))?;
 
     Ok(info)
+}
+
+pub fn generate_tx_filename(tx_type: &str, suffix: Option<&str>) -> String {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    if let Some(s) = suffix {
+        format!("secrets/{}_{}_{}.json", tx_type, s, timestamp)
+    } else {
+        format!("secrets/{}_{}.json", tx_type, timestamp)
+    }
 }
