@@ -97,6 +97,8 @@ pub struct FundingContext {
     pub funding_source_lock_script: Script,
     /// Optional xUDT cell dep (for xUDT transactions)
     pub xudt_cell_dep: Option<CellDep>,
+    /// Optional pre-created cell dep resolver (to avoid repeated genesis queries)
+    pub cell_dep_resolver: Option<DefaultCellDepResolver>,
 }
 
 /// Funding transaction wrapper
@@ -581,7 +583,11 @@ impl FundingTxBuilder {
 
         // Step 3: Setup providers
         let ckb_client = CkbRpcClient::new(&self.context.rpc_url);
-        let cell_dep_resolver = {
+
+        // Use pre-created resolver from context if available, otherwise create one
+        let cell_dep_resolver = if let Some(resolver) = &self.context.cell_dep_resolver {
+            resolver.clone()
+        } else {
             match ckb_client.get_block_by_number(0.into())? {
                 Some(genesis_block) => {
                     DefaultCellDepResolver::from_genesis(&BlockView::from(genesis_block))?
@@ -855,6 +861,7 @@ pub async fn build_funding_transaction(
         rpc_url: config.network.rpc_url.clone(),
         funding_source_lock_script: user_lock,
         xudt_cell_dep,
+        cell_dep_resolver: None, // Will be created inside build()
     };
 
     // Build and sign transaction
@@ -1036,6 +1043,24 @@ pub async fn build_cofund_funding_transaction(
         HumanCapacity::from(merchant_capacity_shannon)
     );
 
+    // Optimization: Query genesis block once and reuse for both parties
+    // This avoids slow genesis queries (5-10s each) during Step 1 and Step 2
+    println!("\n🔍 预先查询 genesis block (优化性能)...");
+    let ckb_client = CkbRpcClient::new(&config.network.rpc_url);
+    let cell_dep_resolver = {
+        match ckb_client.get_block_by_number(0.into())? {
+            Some(genesis_block) => {
+                println!("✓ Genesis block 查询完成，将复用于 User 和 Merchant");
+                Some(DefaultCellDepResolver::from_genesis(&BlockView::from(
+                    genesis_block,
+                ))?)
+            }
+            None => {
+                return Err(anyhow!("Failed to get genesis block"));
+            }
+        }
+    };
+
     // Parse keys for user and merchant
     let user_secret_keys = config.user.get_secret_keys()?;
     let merchant_secret_keys = config.merchant.get_secret_keys()?;
@@ -1119,6 +1144,7 @@ pub async fn build_cofund_funding_transaction(
         rpc_url: config.network.rpc_url.clone(),
         funding_source_lock_script: user_lock,
         xudt_cell_dep: xudt_cell_dep.clone(),
+        cell_dep_resolver: cell_dep_resolver.clone(),
     };
 
     let user_tx = FundingTx::new()
@@ -1146,6 +1172,7 @@ pub async fn build_cofund_funding_transaction(
         rpc_url: config.network.rpc_url.clone(),
         funding_source_lock_script: merchant_lock,
         xudt_cell_dep,
+        cell_dep_resolver,
     };
 
     let combined_tx = user_tx // Incremental construction!
