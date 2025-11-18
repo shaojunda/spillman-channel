@@ -455,10 +455,7 @@ fn verify_commitment_output_structure(
         .args(user_pubkey_hash.pack())
         .build();
 
-    if user_lock.code_hash() != expected_user_lock.code_hash()
-        || user_lock.hash_type() != expected_user_lock.hash_type()
-        || user_lock.args() != expected_user_lock.args()
-    {
+    if user_lock != expected_user_lock {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
@@ -496,10 +493,7 @@ fn verify_commitment_output_structure(
 
     let merchant_lock = load_cell_lock(1, Source::Output)?;
 
-    if merchant_lock.code_hash() != expected_merchant_lock.code_hash()
-        || merchant_lock.hash_type() != expected_merchant_lock.hash_type()
-        || merchant_lock.args() != expected_merchant_lock.args()
-    {
+    if merchant_lock != expected_merchant_lock {
         return Err(Error::MerchantPubkeyHashMismatch);
     }
 
@@ -511,10 +505,7 @@ fn verify_commitment_output_structure(
         // Verify user output type script
         let user_output_type = load_cell_type(0, Source::Output)?;
         if let Some(user_t) = user_output_type {
-            if user_t.code_hash() != input_t.code_hash()
-                || user_t.hash_type() != input_t.hash_type()
-                || user_t.args() != input_t.args()
-            {
+            if user_t != input_t {
                 return Err(Error::TypeScriptMismatch);
             }
         }
@@ -523,10 +514,7 @@ fn verify_commitment_output_structure(
         let merchant_output_type = load_cell_type(1, Source::Output)?;
         if let Some(merchant_t) = merchant_output_type {
             // Verify type script matches input
-            if merchant_t.code_hash() != input_t.code_hash()
-                || merchant_t.hash_type() != input_t.hash_type()
-                || merchant_t.args() != input_t.args()
-            {
+            if merchant_t != input_t {
                 return Err(Error::TypeScriptMismatch);
             }
             // Merchant has type script: verify xUDT amount > 0 (merchant receives payment)
@@ -575,10 +563,7 @@ fn verify_refund_output_structure(
         .args(user_pubkey_hash.pack())
         .build();
 
-    if user_lock.code_hash() != expected_user_lock.code_hash()
-        || user_lock.hash_type() != expected_user_lock.hash_type()
-        || user_lock.args() != expected_user_lock.args()
-    {
+    if user_lock != expected_user_lock {
         return Err(Error::UserPubkeyHashMismatch);
     }
 
@@ -616,10 +601,7 @@ fn verify_refund_output_structure(
                 .build()
         };
 
-        if merchant_output.lock().code_hash() != expected_merchant_lock.code_hash()
-            || merchant_output.lock().hash_type() != expected_merchant_lock.hash_type()
-            || merchant_output.lock().args() != expected_merchant_lock.args()
-        {
+        if merchant_output.lock() != expected_merchant_lock {
             return Err(Error::MerchantPubkeyHashMismatch);
         }
 
@@ -642,10 +624,7 @@ fn verify_refund_output_structure(
         // Use load_cell_type API for reliable checking
         let user_output_type = load_cell_type(0, Source::Output)?;
         if let Some(user_t) = user_output_type {
-            if user_t.code_hash() != input_t.code_hash()
-                || user_t.hash_type() != input_t.hash_type()
-                || user_t.args() != input_t.args()
-            {
+            if user_t != input_t {
                 return Err(Error::TypeScriptMismatch);
             }
         }
@@ -661,10 +640,7 @@ fn verify_refund_output_structure(
         if let Ok(_merchant_output) = load_cell(1, Source::Output) {
             let merchant_output_type = load_cell_type(1, Source::Output)?;
             if let Some(merchant_t) = merchant_output_type {
-                if merchant_t.code_hash() != input_t.code_hash()
-                    || merchant_t.hash_type() != input_t.hash_type()
-                    || merchant_t.args() != input_t.args()
-                {
+                if merchant_t != input_t {
                     return Err(Error::TypeScriptMismatch);
                 }
                 // Verify merchant xUDT amount is 0 (only gets CKB capacity back)
