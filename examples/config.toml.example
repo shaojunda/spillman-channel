@@ -5,6 +5,7 @@
 # CKB RPC URL
 rpc_url = "https://testnet.ckb.dev"
 
+# ============ Single-sig Configuration (Default) ============
 [user]
 # User's private key (without 0x prefix)
 private_key = "your_user_private_key_here"
@@ -17,11 +18,29 @@ private_key = "your_merchant_private_key_here"
 # Merchant's CKB address
 address = "ckt1..."
 
+
+# [merchant]
+# address = "ckt1..."
+# multisig_threshold = 2
+# multisig_total = 3
+# private_keys = [
+#     "merchant_key_1_here",
+#     "merchant_key_2_here",
+#     "merchant_key_3_here",
+# ]
+
 [channel]
 # Channel capacity in CKB (e.g., 1000 CKB)
 capacity_ckb = 1000
-# Timeout in epochs (e.g., 144 epochs ≈ 24 days, 1 epoch ≈ 4 hours)
-timeout_epochs = 144
+
+# Timeout in timestamp (Unix timestamp in seconds)
+# e.g., 1763367827 = 2025-11-17 (absolute future time)
+# Must be at least 20 minutes (1200 seconds) greater than current time
+timeout_timestamp = 1763367827
+
+# Transaction fee in shannon (1 CKB = 100,000,000 shannon)
+# e.g., 0.001 CKB = 100,000 shannon
+tx_fee_shannon = 100000
 
 [spillman_lock]
 # Spillman Lock script code hash (type_id from deployment)
@@ -36,3 +55,19 @@ index = 1
 # Auth cell dep (for transaction signing)
 tx_hash = "0x3f0fe5376b847b0c286184bb59d38765841e135d7d64f87b2bf7014c6316eee2"
 index = 0
+
+# ============ Optional: xUDT (e.g., USDI) Configuration ============
+# Uncomment below to enable xUDT token support
+
+# [usdi]
+# # xUDT type script code hash
+# code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+# # Hash type
+# hash_type = "data1"
+# # xUDT args (token identifier)
+# args = "0x..."
+# # Cell dep for xUDT type script
+# tx_hash = "0x..."
+# index = 0
+# # Token decimal places (e.g., 6 for USDI)
+# decimal = 6
