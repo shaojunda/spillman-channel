@@ -110,7 +110,8 @@ struct SpillmanLockArgs {
 - `timeout_timestamp`: 超时时间戳，**u64 小端序**，Unix timestamp 秒格式，使用 CKB 的 Since 字段传递
 - `algorithm_id`: 商户签名算法 ID
   - `0`: CKB 单签（secp256k1_blake160_sighash_all）
-  - `6`: CKB 多签（secp256k1_blake160_multisig_all）
+  - `6`: CKB Legacy 多签（secp256k1_blake160_multisig_all）
+  - `7`: CKB V2 多签（secp256k1_blake160_multisig_all）
 - `version`: 合约版本号，当前为 0，方便未来升级
 
 **字段顺序设计考虑**：
