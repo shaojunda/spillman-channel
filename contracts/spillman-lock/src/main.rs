@@ -502,30 +502,30 @@ fn verify_commitment_output_structure(
 
     // If input has type script, both outputs must have the same type script
     if let Some(input_t) = type_script {
-        // Verify user output type script
-        let user_output_type = load_cell_type(0, Source::Output)?;
-        if let Some(user_t) = user_output_type {
-            if user_t != input_t {
-                return Err(Error::TypeScriptMismatch);
-            }
+        // Verify user output type script - MUST exist
+        let user_output_type =
+            load_cell_type(0, Source::Output)?.ok_or(Error::TypeScriptMismatch)?;
+        if user_output_type != input_t {
+            return Err(Error::TypeScriptMismatch);
         }
 
-        // Verify merchant output type script and xUDT amount
-        let merchant_output_type = load_cell_type(1, Source::Output)?;
-        if let Some(merchant_t) = merchant_output_type {
-            // Verify type script matches input
-            if merchant_t != input_t {
-                return Err(Error::TypeScriptMismatch);
-            }
-            // Merchant has type script: verify xUDT amount > 0 (merchant receives payment)
-            let merchant_output_data = load_cell_data(1, Source::Output)?;
-            // xUDT amount is stored in first 16 bytes (u128 little-endian)
-            if merchant_output_data.len() < 16 {
-                return Err(Error::XudtAmountMismatch);
-            }
-            if merchant_output_data[0..16] == [0u8; 16] {
-                return Err(Error::XudtAmountMismatch);
-            }
+        // Verify merchant output type script - MUST exist and xUDT amount > 0
+        let merchant_output_type =
+            load_cell_type(1, Source::Output)?.ok_or(Error::TypeScriptMismatch)?;
+
+        // Verify type script matches input
+        if merchant_output_type != input_t {
+            return Err(Error::TypeScriptMismatch);
+        }
+
+        // Merchant has type script: verify xUDT amount > 0 (merchant receives payment)
+        let merchant_output_data = load_cell_data(1, Source::Output)?;
+        // xUDT amount is stored in first 16 bytes (u128 little-endian)
+        if merchant_output_data.len() < 16 {
+            return Err(Error::XudtAmountMismatch);
+        }
+        if merchant_output_data[0..16] == [0u8; 16] {
+            return Err(Error::XudtAmountMismatch);
         }
     } else {
         // If input has no type script, outputs should not have type script either
@@ -620,13 +620,11 @@ fn verify_refund_output_structure(
 
     // 4. Verify type script consistency and xUDT amounts
     if let Some(input_t) = input_type {
-        // Verify user output (Output 0) has same type script and all xUDT
-        // Use load_cell_type API for reliable checking
-        let user_output_type = load_cell_type(0, Source::Output)?;
-        if let Some(user_t) = user_output_type {
-            if user_t != input_t {
-                return Err(Error::TypeScriptMismatch);
-            }
+        // Verify user output (Output 0) has same type script and all xUDT - MUST exist
+        let user_output_type =
+            load_cell_type(0, Source::Output)?.ok_or(Error::TypeScriptMismatch)?;
+        if user_output_type != input_t {
+            return Err(Error::TypeScriptMismatch);
         }
 
         // Verify user gets all xUDT (full refund)
@@ -638,21 +636,23 @@ fn verify_refund_output_structure(
 
         // If there's merchant output (Output 1), verify type script and xUDT amount = 0
         if let Ok(_merchant_output) = load_cell(1, Source::Output) {
-            let merchant_output_type = load_cell_type(1, Source::Output)?;
-            if let Some(merchant_t) = merchant_output_type {
-                if merchant_t != input_t {
-                    return Err(Error::TypeScriptMismatch);
-                }
-                // Verify merchant xUDT amount is 0 (only gets CKB capacity back)
-                let merchant_output_data = load_cell_data(1, Source::Output)?;
-                // xUDT amount is stored in first 16 bytes (u128 little-endian)
-                if merchant_output_data.len() < 16 {
-                    return Err(Error::XudtAmountMismatch);
-                }
-                // Check if amount is zero
-                if merchant_output_data[0..16] != [0u8; 16] {
-                    return Err(Error::XudtAmountMismatch);
-                }
+            // Merchant output MUST have type script
+            let merchant_output_type =
+                load_cell_type(1, Source::Output)?.ok_or(Error::TypeScriptMismatch)?;
+
+            if merchant_output_type != input_t {
+                return Err(Error::TypeScriptMismatch);
+            }
+
+            // Verify merchant xUDT amount is 0 (only gets CKB capacity back)
+            let merchant_output_data = load_cell_data(1, Source::Output)?;
+            // xUDT amount is stored in first 16 bytes (u128 little-endian)
+            if merchant_output_data.len() < 16 {
+                return Err(Error::XudtAmountMismatch);
+            }
+            // Check if amount is zero
+            if merchant_output_data[0..16] != [0u8; 16] {
+                return Err(Error::XudtAmountMismatch);
             }
         }
     } else {
