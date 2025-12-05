@@ -1417,6 +1417,7 @@ fn test_spillman_lock_multisig_error_scenarios() {
 }
 
 // Helper function to build and sign transaction with multisig merchant
+#[allow(clippy::too_many_arguments)]
 fn build_and_sign_tx_multisig(
     cell_deps: CellDepVec,
     input: CellInput,
@@ -2141,10 +2142,10 @@ fn test_spillman_lock_ommitment_path_witness_format_errors() {
         .build();
 
     // Test 1: Witness too short (less than min length)
-    let short_witness = vec![0u8; 10]; // Way too short
+    let short_witness = [0u8; 10]; // Way too short
     let fail_tx_1 = tx
         .as_advanced_builder()
-        .witness(short_witness.pack())
+        .witness(Bytes::from(short_witness.to_vec()).pack())
         .build();
 
     let err = context

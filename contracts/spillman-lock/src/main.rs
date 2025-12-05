@@ -47,7 +47,7 @@ pub enum Error {
     Encoding,
     // Add customized errors here...
     MultipleInputs,
-    WitnessLenError,
+    WitnessLen,
     UnsupportedVersion,
     InvalidUnlockType,
     CommitmentMustHaveExactlyTwoOutputs,
@@ -56,9 +56,9 @@ pub enum Error {
     InvalidLockArgs,
     UserPubkeyHashMismatch,
     MerchantPubkeyHashMismatch,
-    EmptyWitnessArgsError,
-    ArgsLenError,
-    AuthError,
+    EmptyWitnessArgs,
+    ArgsLen,
+    Auth,
     ExcessiveFee,
     TypeScriptMismatch,
     XudtAmountMismatch,
@@ -156,7 +156,7 @@ fn verify() -> Result<(), Error> {
 
     // Check minimum witness length
     if witness.len() < EMPTY_WITNESS_ARGS.len() + UNLOCK_TYPE_LEN + SIGNATURE_LEN {
-        return Err(Error::WitnessLenError);
+        return Err(Error::WitnessLen);
     }
 
     // Verify and remove the empty WitnessArgs prefix (16 bytes)
@@ -165,7 +165,7 @@ fn verify() -> Result<(), Error> {
         .collect::<Vec<_>>()
         != EMPTY_WITNESS_ARGS
     {
-        return Err(Error::EmptyWitnessArgsError);
+        return Err(Error::EmptyWitnessArgs);
     }
 
     let message = {
@@ -182,7 +182,7 @@ fn verify() -> Result<(), Error> {
 
     // Verify args length (fixed 50 bytes)
     if args.len() != ARGS_LEN {
-        return Err(Error::ArgsLenError);
+        return Err(Error::ArgsLen);
     }
 
     // Parse args fields
@@ -213,14 +213,14 @@ fn verify() -> Result<(), Error> {
         AUTH_ALGORITHM_CKB => {
             // Single-sig: witness should be exactly 130 bytes (merchant_sig + user_sig)
             if witness.len() != 130 {
-                return Err(Error::WitnessLenError);
+                return Err(Error::WitnessLen);
             }
             (AUTH_ALGORITHM_CKB, merchant_lock_arg.to_vec())
         }
         AUTH_ALGORITHM_CKB_MULTISIG_LEGACY | AUTH_ALGORITHM_CKB_MULTISIG_V2 => {
             // Multi-sig: extract and verify multisig_config from witness
             if witness.len() < MULTISIG_HEADER_LEN + SIGNATURE_LEN {
-                return Err(Error::WitnessLenError);
+                return Err(Error::WitnessLen);
             }
 
             // Verify multisig_config format version
@@ -234,7 +234,7 @@ fn verify() -> Result<(), Error> {
             let multisig_config_len = MULTISIG_HEADER_LEN + pubkey_cnt * MERCHANT_LOCK_ARG_LEN;
 
             if witness.len() < multisig_config_len + SIGNATURE_LEN {
-                return Err(Error::WitnessLenError);
+                return Err(Error::WitnessLen);
             }
 
             // Extract multisig_config from witness
@@ -420,15 +420,15 @@ fn verify_signature_with_auth(
     ];
 
     // Spawn auth contract to verify signature
-    let pid = spawn_cell(&AUTH_CODE_HASH, ScriptHashType::Data1, &args, &[])
-        .map_err(|_| Error::AuthError)?;
+    let pid =
+        spawn_cell(&AUTH_CODE_HASH, ScriptHashType::Data1, &args, &[]).map_err(|_| Error::Auth)?;
 
     // Wait for auth contract to complete and check exit code
-    let exit_code = wait(pid).map_err(|_| Error::AuthError)?;
+    let exit_code = wait(pid).map_err(|_| Error::Auth)?;
 
     match exit_code {
         0 => Ok(()),
-        _ => Err(Error::AuthError),
+        _ => Err(Error::Auth),
     }
 }
 
